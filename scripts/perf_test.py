@@ -3,6 +3,16 @@ import websockets
 import json
 import time
 import random
+import os
+import logging
+
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    filename="logs/perf_test.log",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    filemode="w" # Overwrite each run for clean stats
+)
 
 async def send_orders(websocket, num_orders):
     for i in range(num_orders):
@@ -36,10 +46,10 @@ async def receive_confirmations(websocket, num_orders):
 
 async def run_benchmark(num_orders):
     uri = "ws://127.0.0.1:8080/ws/orders"
-    print(f"Connecting to {uri}...")
+    logging.info(f"Connecting to {uri}...")
     
     async with websockets.connect(uri) as websocket:
-        print("Connected! Generating orders...")
+        logging.info("Connected! Generating orders...")
         
         start_time = time.perf_counter()
         
@@ -54,12 +64,12 @@ async def run_benchmark(num_orders):
         total_time = end_time - start_time
         throughput = num_orders / total_time
         
-        print("\n=== Benchmark Results ===")
-        print(f"Total Orders Submitted: {num_orders}")
-        print(f"Total Matches (Trades): {trades_filled}")
-        print(f"Total Time Taken:      {total_time:.4f} seconds")
-        print(f"Throughput:            {throughput:.2f} orders/sec")
-        print("=========================")
+        logging.info("=== Benchmark Results ===")
+        logging.info(f"Total Orders Submitted: {num_orders}")
+        logging.info(f"Total Matches (Trades): {trades_filled}")
+        logging.info(f"Total Time Taken:      {total_time:.4f} seconds")
+        logging.info(f"Throughput:            {throughput:.2f} orders/sec")
+        logging.info("=========================")
 
 if __name__ == "__main__":
     # Test with 5000 orders

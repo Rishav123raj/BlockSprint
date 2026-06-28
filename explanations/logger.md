@@ -8,9 +8,10 @@ This file implements a lightweight, thread-safe stdout diagnostics logger. It en
 
 1. **Defines Log Levels**: Declares `enum class LogLevel` with values `LEVEL_DEBUG`, `LEVEL_INFO`, `LEVEL_WARN`, and `LEVEL_ERROR`.
    - *Note*: Windows headers (`wingdi.h`) define `ERROR` as a preprocessor macro (`#define ERROR 0`). Using `LEVEL_ERROR` avoids compilation failures on Windows.
-2. **Thread Safety**: Uses a `std::mutex` and a `std::lock_guard` inside the `log` function. When a thread writes a log line, it grabs the lock, blocks other logging threads, prints the line, and releases it.
-3. **Singleton Pattern**: Uses static initialization to implement a thread-safe Singleton instance wrapper.
-4. **Timestamps**: Resolves local clocks to millisecond values and formats the output string as `YYYY-MM-DD HH:MM:SS.sss` utilizing thread-safe `gmtime_s` or `gmtime_r` operations.
+2. **File Logging Output**: Creates a `logs/` folder at startup using `std::filesystem::create_directories` and opens a file stream to `logs/matching_engine.log`.
+3. **Thread Safety**: Uses a `std::mutex` and a `std::lock_guard` inside the `log` function. When a thread writes a log line, it grabs the lock, blocks other logging threads, writes to the file stream, and releases it.
+4. **Singleton Pattern**: Uses static initialization to implement a thread-safe Singleton instance wrapper.
+5. **Timestamps**: Resolves local clocks to millisecond values and formats the output string as `YYYY-MM-DD HH:MM:SS.sss` utilizing thread-safe `gmtime_s` or `gmtime_r` operations.
 5. **Macros**: Exposes utility macros (`LOG_DEBUG`, `LOG_INFO`, `LOG_WARN`, `LOG_ERROR`) to simplify usage across other files.
 
 ---
@@ -40,6 +41,6 @@ graph TD
     M --> LOG
     LOG -->|std::lock_guard| MUTEX
     MUTEX -->|Acquires Lock| EXEC[Generate Timestamp & Format Output]
-    EXEC -->|std::cout| STDOUT((Console Output))
-    STDOUT -->|Releases Lock| MUTEX
+    EXEC -->|std::ofstream| FILE[(logs/matching_engine.log)]
+    FILE -->|Releases Lock| MUTEX
 ```

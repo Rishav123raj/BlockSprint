@@ -1,5 +1,7 @@
 #pragma once
 #include <iostream>
+#include <fstream>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <sstream>
@@ -22,6 +24,9 @@ public:
 
     void log(LogLevel level, const std::string& message) {
         std::lock_guard<std::mutex> lock(mutex_);
+        if (!log_file_.is_open()) {
+            return;
+        }
         
         auto now = std::chrono::system_clock::now();
         auto time_t_now = std::chrono::system_clock::to_time_t(now);
@@ -31,9 +36,9 @@ public:
 
         std::tm tm_val;
 #if defined(_WIN32) || defined(_WIN64)
-        gmtime_s(&tm_val, &time_t_now);
+        localtime_s(&tm_val, &time_t_now);
 #else
-        gmtime_r(&time_t_now, &tm_val);
+        localtime_r(&time_t_now, &tm_val);
 #endif
 
         std::string level_str;
@@ -44,18 +49,26 @@ public:
             case LogLevel::LEVEL_ERROR: level_str = "[ERROR]"; break;
         }
 
-        std::cout << std::put_time(&tm_val, "%Y-%m-%d %H:%M:%S")
+        log_file_ << std::put_time(&tm_val, "%Y-%m-%d %H:%M:%S")
                   << "." << std::setw(3) << std::setfill('0') << ms
                   << " " << level_str << " " << message << std::endl;
     }
 
 private:
-    Logger() = default;
-    ~Logger() = default;
+    Logger() {
+        std::filesystem::create_directories("logs");
+        log_file_.open("logs/matching_engine.log", std::ios::out | std::ios::app);
+    }
+    ~Logger() {
+        if (log_file_.is_open()) {
+            log_file_.close();
+        }
+    }
     Logger(const Logger&) = delete;
     Logger& operator=(const Logger&) = delete;
 
     std::mutex mutex_;
+    std::ofstream log_file_;
 };
 
 #define LOG_DEBUG(msg) Logger::getInstance().log(LogLevel::LEVEL_DEBUG, msg)

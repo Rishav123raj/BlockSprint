@@ -1,0 +1,26 @@
+2026-06-28 16:56:41.098 [INFO] === Running Crypto Trading Engine C++ Unit Tests ===
+2026-06-28 16:56:41.099 [INFO] Running test: price_time_priority
+2026-06-28 16:56:41.100 [INFO] PASS: price_time_priority
+2026-06-28 16:56:41.100 [INFO] Running test: internal_trade_through_protection
+2026-06-28 16:56:41.100 [INFO] PASS: internal_trade_through_protection
+2026-06-28 16:56:41.100 [INFO] Running test: ioc_order_handling
+2026-06-28 16:56:41.100 [INFO] PASS: ioc_order_handling
+2026-06-28 16:56:41.100 [INFO] Running test: fok_order_handling
+2026-06-28 16:56:41.101 [INFO] PASS: fok_order_handling
+2026-06-28 16:56:41.103 [INFO] Running test: order_cancellation
+2026-06-28 16:56:41.103 [INFO] PASS: order_cancellation
+2026-06-28 16:56:41.103 [INFO] Running test: order_modification
+2026-06-28 16:56:41.103 [INFO] PASS: order_modification
+2026-06-28 16:56:41.103 [INFO] === Unit Test Results ===
+2026-06-28 16:56:41.103 [INFO] Passes: 6
+2026-06-28 16:56:41.103 [INFO] Failures: 0
+2026-06-28 16:57:00.228 [INFO] === Starting Crypto Trading Engine ===
+2026-06-28 16:57:00.231 [INFO] Starting API Server on port 8080...
+2026-06-28 16:57:00.233 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-06-28 16:57:00.233 [INFO] Press Ctrl+C to exit.
+2026-06-28 16:57:20.928 [DEBUG] New WS connection opened on path: /ws/orders
+2026-06-28 16:57:23.318 [DEBUG] WS connection closed.
+2026-06-28 16:57:31.658 [DEBUG] New WS connection opened on path: /ws/market-data
+2026-06-28 16:57:31.658 [DEBUG] New WS connection opened on path: /ws/trades
+2026-06-28 16:57:37.856 [DEBUG] WS connection closed.
+2026-06-28 16:57:37.856 [DEBUG] WS connection closed.
