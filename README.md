@@ -33,12 +33,12 @@ graph TD
         WS_OE_C[Order Entry Stream Client]
     end
 
-    subgraph BlockSprint API Server (Port 8080)
+    subgraph BlockSprint_API_Server ["BlockSprint API Server (Port 8080)"]
         HTTP_HDL[on_http REST Route Handler]
         WS_OPEN[on_open Subscription Registry]
         WS_MSG[on_message Socket Message Handler]
         
-        subgraph Subscribed Handles (Mutex Protected)
+        subgraph Subscribed_Handles ["Subscribed Handles (Mutex Protected)"]
             MD_SET["market_data_conns_ (set)"]
             TR_SET["trades_conns_ (set)"]
             OE_SET["orders_conns_ (set)"]
