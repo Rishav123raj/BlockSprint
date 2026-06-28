@@ -33,8 +33,8 @@ The diagram below shows how the internal maps, price levels, and order lists are
 classDiagram
     class OrderBook {
         -string symbol_
-        -map bids_ (std::greater)
-        -map asks_ (std::less)
+        -map bids_
+        -map asks_
         -unordered_map orders_lookup_
         +submit_order(Order) vector~Trade~
         +cancel_order(order_id) bool
@@ -53,13 +53,13 @@ classDiagram
         +string order_id
         +double quantity
         +double remaining_quantity
-        +list_it (Back-pointer iterator)
+        +list_it
     }
 
-    OrderBook o-- PriceLevel : Contains sorted maps of Bids/Asks
-    PriceLevel o-- Order : Contains FIFO list of Orders
-    OrderBook --> Order : Quick lookup via orders_lookup_ [O(1)]
-    Order --> PriceLevel : list_it points back to its list node for O(1) delete
+    OrderBook o-- PriceLevel : "Contains sorted maps of Bids/Asks"
+    PriceLevel o-- Order : "Contains FIFO list of Orders"
+    OrderBook --> Order : "Quick lookup via orders_lookup_ [O(1)]"
+    Order --> PriceLevel : "list_it points back to its list node for O(1) delete"
 ```
 
 ---

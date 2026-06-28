@@ -41,15 +41,15 @@ graph TD
         WSC3[Order Entry WS Client]
     end
 
-    subgraph ApiServer (Port 8080)
+    subgraph ApiServer ["ApiServer (Port 8080)"]
         HTTP_HDL[on_http HTTP Handler]
         WS_OPEN[on_open Connection Handler]
         WS_MSG[on_message Message Handler]
         WS_CLOSE[on_close Close Handler]
         
-        M_CONN[market_data_conns_ std::set]
-        T_CONN[trades_conns_ std::set]
-        O_CONN[orders_conns_ std::set]
+        M_CONN["market_data_conns_ std::set"]
+        T_CONN["trades_conns_ std::set"]
+        O_CONN["orders_conns_ std::set"]
     end
 
     subgraph Matching Engine Manager

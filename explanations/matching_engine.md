@@ -32,10 +32,10 @@ graph TD
         WS[WS Thread]
     end
 
-    subgraph MatchingEngineManager (Thread-Safe Registry)
+    subgraph MatchingEngineManager ["MatchingEngineManager (Thread-Safe Registry)"]
         M[MatchingEngineManager::getInstance]
         MUTEX[std::recursive_mutex mutex_]
-        MAP[books_ : Symbol -> OrderBook]
+        MAP["books_ : Symbol -> OrderBook"]
     end
 
     subgraph OrderBooks
