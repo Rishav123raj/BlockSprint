@@ -1,0 +1,69 @@
+Objective:
+Develop a high-performance cryptocurrency matching engine. This engine should implement core trading functionalities based on REG NMS-inspired principles of price-time priority and internal order protection. Additionally, the engine must generate its own stream of trade execution data.
+
+Initial Setup:
+1. Set up a development environment for C++.
+2. Familiarize yourself with common order types in financial markets (Market, Limit, IOC, FOK).
+
+Core Requirements:
+
+Matching Engine Logic (REG NMS-inspired Principles)
+1. BBO Calculation and Dissemination:
+    - The matching engine must maintain a real-time Best Bid and Offer (BBO) for each trading pair based on its internal order book.
+    - The BBO must be accurately calculated and updated instantaneously as orders are added, modified, canceled, or matched.
+
+2. Internal Order Protection & Price-Time Priority:
+    - Implement a strict price-time priority matching algorithm. For a given price level, orders must be filled based on their time of arrival (FIFO).
+    - Ensure that orders offering a better price (higher bid, lower offer) are always prioritized.
+    - The system must prevent "internal trade-throughs": an incoming marketable order (e.g., market order or a limit order priced to cross the spread) must always be matched at the best available price(s) on the internal order book. If an order can be partially filled at a better price, it must be, before moving to the next price level on the book.
+
+3. Order Type Handling:
+    - Support core order types:
+        - Market Order: Executes immediately at the best available current price(s).
+        - Limit Order: Executes at the specified price or better. Must rest on the book if not immediately marketable.
+        - Immediate-Or-Cancel (IOC): Executes all or part of the order immediately at the best available price(s), and cancels any unfilled portion. Must not trade through the internal BBO.
+        - Fill-Or-Kill (FOK): Executes the entire order immediately at the best available price(s), or cancels the entire order if it cannot be fully filled. Must not trade through the internal BBO.
+
+Data Generation & API
+1. Order Submission API:
+    - Implement an API (e.g., REST or WebSocket) to allow users/systems to submit new orders.
+    - Input parameters for order submission:
+        - symbol (e.g., "BTC-USDT")
+        - order_type ("market", "limit", "ioc", "fok")
+        - side ("buy", "sell")
+        - quantity (decimal)
+        - price (decimal, required for limit orders)
+2. Market Data Dissemination API:
+    - Implement an API (e.g., WebSocket) to stream real-time market data from the engine.
+    - This feed should include:
+        - Current BBO (Best Bid & Offer).
+        - Order book depth (e.g., top 10 levels of bids and asks).
+    - Sample L2 Order Book Update (for client consumption):
+        {
+          "timestamp": "YYYY-MM-DDTHH:MM:SS.ssssssZ",
+          "symbol": "BTC-USDT",
+          "asks": [ /* Array of ["price_level", "quantity_at_price_level"] */ ],
+          "bids": [ /* Array of ["price_level", "quantity_at_price_level"] */ ]
+        }
+3. Trade Execution Data Generation & API:
+    - The matching engine must generate a data stream of its own trade executions (fills) as they occur.
+    - Implement an API (e.g., WebSocket) for clients to subscribe to this trade feed.
+    - Sample Trade Execution Report:
+        {
+          "timestamp": "YYYY-MM-DDTHH:MM:SS.ssssssZ",
+          "symbol": "BTC-USDT",
+          "trade_id": "unique_trade_identifier",
+          "price": "execution_price",
+          "quantity": "executed_quantity",
+          "aggressor_side": "buy/sell", // The side of the incoming order that initiated the trade
+          "maker_order_id": "id_of_the_resting_order",
+          "taker_order_id": "id_of_the_incoming_order"
+        }
+
+Technical Requirements
+1. Implementation in either Python or C++ (your choice).
+2. The system must be designed for high performance, capable of processing a significant volume of orders per second (specify target if desired, e.g., >1000 orders/sec).
+3. Robust error handling (e.g., for invalid order parameters, insufficient funds if applicable).
+4. Comprehensive logging for diagnostics and audit trails.
+5. Clean, maintainable, and well-documented code architecture.
+6. Unit tests for core matching logic and order handling.
