@@ -24,3 +24,16 @@
 2026-06-28 16:57:31.658 [DEBUG] New WS connection opened on path: /ws/trades
 2026-06-28 16:57:37.856 [DEBUG] WS connection closed.
 2026-06-28 16:57:37.856 [DEBUG] WS connection closed.
+2026-06-28 17:19:12.282 [INFO] === Terminating Crypto Trading Engine ===
+2026-06-28 17:19:12.283 [INFO] Stopping API Server...
+2026-06-28 17:19:12.285 [INFO] API Server stopped.
+2026-06-28 17:19:12.285 [INFO] Server stopped successfully. Goodbye!
+2026-06-29 22:42:40.478 [INFO] === Starting Crypto Trading Engine ===
+2026-06-29 22:42:40.482 [INFO] Starting API Server on port 8080...
+2026-06-29 22:42:40.484 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-06-29 22:42:40.485 [INFO] Press Ctrl+C to exit.
+2026-06-29 22:42:59.337 [DEBUG] New WS connection opened on path: /ws/orders
+2026-06-29 22:51:25.883 [INFO] === Terminating Crypto Trading Engine ===
+2026-06-29 22:51:25.884 [INFO] Stopping API Server...
+2026-06-29 22:51:25.884 [INFO] API Server stopped.
+2026-06-29 22:51:25.885 [INFO] Server stopped successfully. Goodbye!
