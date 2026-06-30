@@ -22,6 +22,9 @@ This component implements the core order book data structure, price-time priorit
 5. **Order Modification**:
    - If the price remains unchanged and the quantity decreases: Updates the quantity in-place. The order **retains** its queue priority.
    - If the price changes or quantity increases: Cancels the old order and submits a new one. The order **loses** its queue priority.
+6. **Self-Trade Prevention (STP) & Safe Replacement**:
+   - **Self-Trade Prevention**: Incoming orders starting with `"BINANCE_"` prefix are blocked from matching against resting orders that *also* start with `"BINANCE_"`, preventing artificial self-crossing trades.
+   - **Safe Replacement**: If a new order is submitted with an `order_id` that is already active (e.g. during a level update), the engine automatically cancels the existing order first. This prevents memory leaks and queue cluttering.
 
 ---
 

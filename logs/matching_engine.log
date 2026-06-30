@@ -37,3 +37,41 @@
 2026-06-29 22:51:25.884 [INFO] Stopping API Server...
 2026-06-29 22:51:25.884 [INFO] API Server stopped.
 2026-06-29 22:51:25.885 [INFO] Server stopped successfully. Goodbye!
+2026-06-30 21:41:29.342 [INFO] === Running Crypto Trading Engine C++ Unit Tests ===
+2026-06-30 21:41:29.343 [INFO] Running test: price_time_priority
+2026-06-30 21:41:29.344 [INFO] PASS: price_time_priority
+2026-06-30 21:41:29.344 [INFO] Running test: internal_trade_through_protection
+2026-06-30 21:41:29.344 [INFO] PASS: internal_trade_through_protection
+2026-06-30 21:41:29.344 [INFO] Running test: ioc_order_handling
+2026-06-30 21:41:29.344 [INFO] PASS: ioc_order_handling
+2026-06-30 21:41:29.345 [INFO] Running test: fok_order_handling
+2026-06-30 21:41:29.345 [INFO] PASS: fok_order_handling
+2026-06-30 21:41:29.345 [INFO] Running test: order_cancellation
+2026-06-30 21:41:29.345 [INFO] PASS: order_cancellation
+2026-06-30 21:41:29.345 [INFO] Running test: order_modification
+2026-06-30 21:41:29.345 [INFO] PASS: order_modification
+2026-06-30 21:41:29.345 [INFO] === Unit Test Results ===
+2026-06-30 21:41:29.345 [INFO] Passes: 6
+2026-06-30 21:41:29.345 [INFO] Failures: 0
+2026-06-30 21:41:55.949 [INFO] === Starting Crypto Trading Engine ===
+2026-06-30 21:41:55.951 [INFO] Starting API Server on port 8080...
+2026-06-30 21:41:55.952 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-06-30 21:41:55.952 [INFO] Press Ctrl+C to exit.
+2026-06-30 21:42:24.412 [DEBUG] New WS connection opened on path: /ws/orders
+2026-06-30 21:53:11.964 [INFO] === Terminating Crypto Trading Engine ===
+2026-06-30 21:53:11.964 [INFO] Stopping API Server...
+2026-06-30 21:54:07.709 [INFO] === Starting Crypto Trading Engine ===
+2026-06-30 21:54:07.710 [INFO] Starting API Server on port 8080...
+2026-06-30 21:54:07.711 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-06-30 21:54:07.711 [INFO] Press Ctrl+C to exit.
+2026-06-30 21:54:29.451 [DEBUG] New WS connection opened on path: /ws/orders
+2026-06-30 21:57:58.587 [DEBUG] New WS connection opened on path: /ws/orders
+2026-06-30 21:58:01.521 [DEBUG] WS connection closed.
+2026-06-30 21:58:29.431 [DEBUG] New WS connection opened on path: /ws/market-data
+2026-06-30 21:58:29.431 [DEBUG] New WS connection opened on path: /ws/trades
+2026-06-30 21:58:35.502 [DEBUG] WS connection closed.
+2026-06-30 21:58:35.502 [DEBUG] WS connection closed.
+2026-06-30 22:16:50.016 [INFO] === Terminating Crypto Trading Engine ===
+2026-06-30 22:16:50.017 [INFO] Stopping API Server...
+2026-06-30 22:16:50.018 [INFO] API Server stopped.
+2026-06-30 22:16:50.018 [INFO] Server stopped successfully. Goodbye!

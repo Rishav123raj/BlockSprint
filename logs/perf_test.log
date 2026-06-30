@@ -1,8 +1,8 @@
-2026-06-28 16:57:20,778 [INFO] Connecting to ws://127.0.0.1:8080/ws/orders...
-2026-06-28 16:57:20,928 [INFO] Connected! Generating orders...
-2026-06-28 16:57:23,317 [INFO] === Benchmark Results ===
-2026-06-28 16:57:23,317 [INFO] Total Orders Submitted: 5000
-2026-06-28 16:57:23,317 [INFO] Total Matches (Trades): 3911
-2026-06-28 16:57:23,317 [INFO] Total Time Taken:      2.3888 seconds
-2026-06-28 16:57:23,318 [INFO] Throughput:            2093.11 orders/sec
-2026-06-28 16:57:23,318 [INFO] =========================
+2026-06-30 21:57:58,454 [INFO] Connecting to ws://127.0.0.1:8080/ws/orders...
+2026-06-30 21:57:58,587 [INFO] Connected! Generating orders...
+2026-06-30 21:58:01,521 [INFO] === Benchmark Results ===
+2026-06-30 21:58:01,521 [INFO] Total Orders Submitted: 5000
+2026-06-30 21:58:01,521 [INFO] Total Matches (Trades): 5206
+2026-06-30 21:58:01,521 [INFO] Total Time Taken:      2.9333 seconds
+2026-06-30 21:58:01,521 [INFO] Throughput:            1704.56 orders/sec
+2026-06-30 21:58:01,521 [INFO] =========================

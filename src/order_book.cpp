@@ -9,6 +9,10 @@ static std::atomic<uint64_t> g_trade_id_counter{0};
 OrderBook::OrderBook(std::string symbol) : symbol_(std::move(symbol)) {}
 
 std::vector<Trade> OrderBook::submit_order(std::shared_ptr<Order> order) {
+    if (orders_lookup_.find(order->order_id) != orders_lookup_.end()) {
+        cancel_order(order->order_id);
+    }
+
     order->remaining_quantity = order->quantity;
     order->is_cancelled = false;
     order->has_iterator = false;
@@ -175,6 +179,14 @@ std::vector<Trade> OrderBook::match_limit_order(std::shared_ptr<Order> order) {
                     continue;
                 }
 
+                // Block matching of Binance orders against other Binance orders (STP)
+                bool incoming_is_binance = (order->order_id.rfind("BINANCE_", 0) == 0);
+                bool maker_is_binance = (maker_order->order_id.rfind("BINANCE_", 0) == 0);
+                if (incoming_is_binance && maker_is_binance) {
+                    order_it++;
+                    continue;
+                }
+
                 double match_qty = std::min(order->remaining_quantity, maker_order->remaining_quantity);
                 uint64_t trade_id = ++g_trade_id_counter;
 
@@ -204,6 +216,8 @@ std::vector<Trade> OrderBook::match_limit_order(std::shared_ptr<Order> order) {
 
             if (level.orders.empty()) {
                 asks_.erase(ask_level_it);
+            } else {
+                break;
             }
         }
 
@@ -226,6 +240,14 @@ std::vector<Trade> OrderBook::match_limit_order(std::shared_ptr<Order> order) {
                 auto maker_order = *order_it;
                 if (maker_order->is_cancelled) {
                     order_it = level.orders.erase(order_it);
+                    continue;
+                }
+
+                // Block matching of Binance orders against other Binance orders (STP)
+                bool incoming_is_binance = (order->order_id.rfind("BINANCE_", 0) == 0);
+                bool maker_is_binance = (maker_order->order_id.rfind("BINANCE_", 0) == 0);
+                if (incoming_is_binance && maker_is_binance) {
+                    order_it++;
                     continue;
                 }
 
@@ -258,6 +280,8 @@ std::vector<Trade> OrderBook::match_limit_order(std::shared_ptr<Order> order) {
 
             if (level.orders.empty()) {
                 bids_.erase(bid_level_it);
+            } else {
+                break;
             }
         }
 
@@ -284,6 +308,14 @@ std::vector<Trade> OrderBook::match_market_order(std::shared_ptr<Order> order) {
                     continue;
                 }
 
+                // Block matching of Binance orders against other Binance orders (STP)
+                bool incoming_is_binance = (order->order_id.rfind("BINANCE_", 0) == 0);
+                bool maker_is_binance = (maker_order->order_id.rfind("BINANCE_", 0) == 0);
+                if (incoming_is_binance && maker_is_binance) {
+                    order_it++;
+                    continue;
+                }
+
                 double match_qty = std::min(order->remaining_quantity, maker_order->remaining_quantity);
                 uint64_t trade_id = ++g_trade_id_counter;
 
@@ -313,6 +345,8 @@ std::vector<Trade> OrderBook::match_market_order(std::shared_ptr<Order> order) {
 
             if (level.orders.empty()) {
                 asks_.erase(ask_level_it);
+            } else {
+                break;
             }
         }
     } else { // SELL Side
@@ -324,6 +358,14 @@ std::vector<Trade> OrderBook::match_market_order(std::shared_ptr<Order> order) {
                 auto maker_order = *order_it;
                 if (maker_order->is_cancelled) {
                     order_it = level.orders.erase(order_it);
+                    continue;
+                }
+
+                // Block matching of Binance orders against other Binance orders (STP)
+                bool incoming_is_binance = (order->order_id.rfind("BINANCE_", 0) == 0);
+                bool maker_is_binance = (maker_order->order_id.rfind("BINANCE_", 0) == 0);
+                if (incoming_is_binance && maker_is_binance) {
+                    order_it++;
                     continue;
                 }
 
@@ -356,6 +398,8 @@ std::vector<Trade> OrderBook::match_market_order(std::shared_ptr<Order> order) {
 
             if (level.orders.empty()) {
                 bids_.erase(bid_level_it);
+            } else {
+                break;
             }
         }
     }
@@ -384,6 +428,14 @@ std::vector<Trade> OrderBook::match_ioc_order(std::shared_ptr<Order> order) {
                     continue;
                 }
 
+                // Block matching of Binance orders against other Binance orders (STP)
+                bool incoming_is_binance = (order->order_id.rfind("BINANCE_", 0) == 0);
+                bool maker_is_binance = (maker_order->order_id.rfind("BINANCE_", 0) == 0);
+                if (incoming_is_binance && maker_is_binance) {
+                    order_it++;
+                    continue;
+                }
+
                 double match_qty = std::min(order->remaining_quantity, maker_order->remaining_quantity);
                 uint64_t trade_id = ++g_trade_id_counter;
 
@@ -413,6 +465,8 @@ std::vector<Trade> OrderBook::match_ioc_order(std::shared_ptr<Order> order) {
 
             if (level.orders.empty()) {
                 asks_.erase(ask_level_it);
+            } else {
+                break;
             }
         }
     } else { // SELL Side
@@ -430,6 +484,14 @@ std::vector<Trade> OrderBook::match_ioc_order(std::shared_ptr<Order> order) {
                 auto maker_order = *order_it;
                 if (maker_order->is_cancelled) {
                     order_it = level.orders.erase(order_it);
+                    continue;
+                }
+
+                // Block matching of Binance orders against other Binance orders (STP)
+                bool incoming_is_binance = (order->order_id.rfind("BINANCE_", 0) == 0);
+                bool maker_is_binance = (maker_order->order_id.rfind("BINANCE_", 0) == 0);
+                if (incoming_is_binance && maker_is_binance) {
+                    order_it++;
                     continue;
                 }
 
@@ -462,6 +524,8 @@ std::vector<Trade> OrderBook::match_ioc_order(std::shared_ptr<Order> order) {
 
             if (level.orders.empty()) {
                 bids_.erase(bid_level_it);
+            } else {
+                break;
             }
         }
     }
@@ -490,6 +554,14 @@ bool OrderBook::can_fok_be_fully_filled(std::shared_ptr<Order> order) const {
 
             for (const auto& resting_order : level.orders) {
                 if (resting_order->is_cancelled) continue;
+
+                // Block Binance orders matching with other Binance orders (STP)
+                bool incoming_is_binance = (order->order_id.rfind("BINANCE_", 0) == 0);
+                bool maker_is_binance = (resting_order->order_id.rfind("BINANCE_", 0) == 0);
+                if (incoming_is_binance && maker_is_binance) {
+                    continue;
+                }
+
                 accumulated_qty += resting_order->remaining_quantity;
                 if (accumulated_qty >= needed_qty) {
                     return true;
@@ -504,6 +576,14 @@ bool OrderBook::can_fok_be_fully_filled(std::shared_ptr<Order> order) const {
 
             for (const auto& resting_order : level.orders) {
                 if (resting_order->is_cancelled) continue;
+
+                // Block Binance orders matching with other Binance orders (STP)
+                bool incoming_is_binance = (order->order_id.rfind("BINANCE_", 0) == 0);
+                bool maker_is_binance = (resting_order->order_id.rfind("BINANCE_", 0) == 0);
+                if (incoming_is_binance && maker_is_binance) {
+                    continue;
+                }
+
                 accumulated_qty += resting_order->remaining_quantity;
                 if (accumulated_qty >= needed_qty) {
                     return true;

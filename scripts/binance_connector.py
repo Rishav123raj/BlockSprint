@@ -35,8 +35,6 @@ async def submit_external_order(engine_ws, symbol, side, price, qty):
         "quantity": str(qty)
     }
     await engine_ws.send(json.dumps(payload))
-    # Read and discard confirmation response
-    await engine_ws.recv()
     active_orders[(symbol, side.lower(), float(price))] = order_id
 
 async def cancel_external_order(engine_ws, symbol, side, price):
@@ -50,8 +48,17 @@ async def cancel_external_order(engine_ws, symbol, side, price):
             "order_id": order_id
         }
         await engine_ws.send(json.dumps(payload))
-        await engine_ws.recv() # Read confirmation
         del active_orders[order_key]
+
+async def drain_responses(engine_ws):
+    """Continuously read and discard confirmations from the BlockSprint server to prevent TCP buffer bloat."""
+    try:
+        async for _ in engine_ws:
+            pass
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"Drain task stopped: {e}")
 
 def get_active_symbols(limit=10):
     """
@@ -120,41 +127,48 @@ async def sync_websocket_deltas(active_symbols):
     async with websockets.connect(binance_ws_url) as binance_ws, \
                websockets.connect(ENGINE_WS_URL) as engine_ws:
                
-        # Bootstrap book snapshots first
-        await load_rest_snapshots(engine_ws, active_symbols)
+        # Start a background task to drain messages from engine_ws
+        drain_task = asyncio.create_task(drain_responses(engine_ws))
         
-        print("Listening for real-time WebSocket book deltas...")
-        while True:
-            try:
-                frame = await binance_ws.recv()
-                msg = json.loads(frame)
-                
-                stream = msg["stream"]
-                data = msg["data"]
-                
-                # Format: "ETHUSDT" from stream name
-                raw_symbol = stream.split("@")[0].upper()
-                symbol = raw_symbol.replace("USDT", "-USDT")
-                
-                # Sync Bids
-                for bid in data["bids"]:
-                    price, qty = float(bid[0]), float(bid[1])
-                    if qty == 0.0:
-                        await cancel_external_order(engine_ws, symbol, "buy", price)
-                    else:
-                        await submit_external_order(engine_ws, symbol, "buy", price, qty)
-                        
-                # Sync Asks
-                for ask in data["asks"]:
-                    price, qty = float(ask[0]), float(ask[1])
-                    if qty == 0.0:
-                        await cancel_external_order(engine_ws, symbol, "sell", price)
-                    else:
-                        await submit_external_order(engine_ws, symbol, "sell", price, qty)
-                        
-            except Exception as e:
-                print(f"Sync error: {e}")
-                await asyncio.sleep(1)
+        try:
+            # Bootstrap book snapshots first
+            await load_rest_snapshots(engine_ws, active_symbols)
+            
+            print("Listening for real-time WebSocket book deltas...")
+            while True:
+                try:
+                    frame = await binance_ws.recv()
+                    msg = json.loads(frame)
+                    
+                    stream = msg["stream"]
+                    data = msg["data"]
+                    
+                    # Format: "ETHUSDT" from stream name
+                    raw_symbol = stream.split("@")[0].upper()
+                    symbol = raw_symbol.replace("USDT", "-USDT")
+                    
+                    # Sync Bids
+                    for bid in data["bids"]:
+                        price, qty = float(bid[0]), float(bid[1])
+                        if qty == 0.0:
+                            await cancel_external_order(engine_ws, symbol, "buy", price)
+                        else:
+                            await submit_external_order(engine_ws, symbol, "buy", price, qty)
+                            
+                    # Sync Asks
+                    for ask in data["asks"]:
+                        price, qty = float(ask[0]), float(ask[1])
+                        if qty == 0.0:
+                            await cancel_external_order(engine_ws, symbol, "sell", price)
+                        else:
+                            await submit_external_order(engine_ws, symbol, "sell", price, qty)
+                            
+                except Exception as e:
+                    print(f"Sync error: {e}")
+                    await asyncio.sleep(1)
+        finally:
+            drain_task.cancel()
+            await asyncio.gather(drain_task, return_exceptions=True)
 
 if __name__ == "__main__":
     symbols = get_active_symbols(limit=5)
