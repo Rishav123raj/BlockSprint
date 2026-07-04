@@ -122,3 +122,15 @@ Run the simulation script to test simultaneous WebSocket subscriptions and REST 
 uv run scripts/client_demo.py
 ```
 *Expected Verification*: Check [`logs/client_demo.log`](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/logs/client_demo.log) to verify trades are executing correctly against the live spreads.
+
+---
+
+## Phase 9: Unified Project Launch & Verification Script
+
+To compile the latest C++ matching engine, launch the engine and the Binance connector in the background, run interactive validation prompts, and automatically clean up processes on exit, run the following unified command:
+
+```powershell
+# Launch the entire test harness in one go
+uv run python scripts/run_all.py
+```
+*Expected Verification*: Input `BUY` / `LIMIT` / `1800` / `10` against `ETH-USDT` to perform automated assertions and verify execution fills.

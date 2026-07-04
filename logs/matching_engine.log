@@ -158,3 +158,78 @@
 2026-07-04 10:39:41.430 [INFO] All matching engine order books cleared (system reset).
 2026-07-04 10:39:44.917 [INFO] All matching engine order books cleared (system reset).
 2026-07-04 10:39:45.711 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:14:28.692 [INFO] === Terminating Crypto Trading Engine ===
+2026-07-04 11:14:28.693 [INFO] Stopping API Server...
+2026-07-04 11:14:28.707 [INFO] API Server stopped.
+2026-07-04 11:14:28.707 [INFO] Server stopped successfully. Goodbye!
+2026-07-04 11:14:57.498 [INFO] === Starting Crypto Trading Engine ===
+2026-07-04 11:14:57.500 [INFO] Starting API Server on port 8080...
+2026-07-04 11:14:57.501 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-07-04 11:14:57.501 [INFO] Press Ctrl+C to exit.
+2026-07-04 11:14:57.880 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:14:58.593 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:14:58.716 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:15:01.321 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:15:02.116 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:15:32.611 [INFO] === Starting Crypto Trading Engine ===
+2026-07-04 11:15:32.613 [INFO] Starting API Server on port 8080...
+2026-07-04 11:15:32.614 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-07-04 11:15:32.614 [INFO] Press Ctrl+C to exit.
+2026-07-04 11:15:33.374 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:15:34.078 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:15:34.753 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:15:36.745 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:15:37.453 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:15:38.415 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:15:39.117 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:17:10.518 [INFO] === Starting Crypto Trading Engine ===
+2026-07-04 11:17:10.520 [INFO] Starting API Server on port 8080...
+2026-07-04 11:17:10.521 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-07-04 11:17:10.521 [INFO] Press Ctrl+C to exit.
+2026-07-04 11:17:10.779 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:17:11.196 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:17:13.193 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:17:16.745 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:17:17.599 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:17:23.098 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:17:23.964 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:17:56.689 [INFO] === Starting Crypto Trading Engine ===
+2026-07-04 11:17:56.690 [INFO] Starting API Server on port 8080...
+2026-07-04 11:17:56.691 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-07-04 11:17:56.692 [INFO] Press Ctrl+C to exit.
+2026-07-04 11:17:57.616 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:00.265 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:00.834 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:01.327 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:18:01.435 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:01.588 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:18:02.146 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:18:02.293 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:03.093 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:18:04.303 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:05.002 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:18:22.246 [INFO] === Starting Crypto Trading Engine ===
+2026-07-04 11:18:22.247 [INFO] Starting API Server on port 8080...
+2026-07-04 11:18:22.248 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-07-04 11:18:22.248 [INFO] Press Ctrl+C to exit.
+2026-07-04 11:18:23.039 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:38.899 [INFO] === Starting Crypto Trading Engine ===
+2026-07-04 11:18:38.900 [INFO] Starting API Server on port 8080...
+2026-07-04 11:18:38.901 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-07-04 11:18:38.901 [INFO] Press Ctrl+C to exit.
+2026-07-04 11:18:39.982 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:42.684 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:43.381 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:18:43.673 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:18:44.539 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:20:39.171 [INFO] === Starting Crypto Trading Engine ===
+2026-07-04 11:20:39.177 [INFO] Starting API Server on port 8080...
+2026-07-04 11:20:39.178 [INFO] Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080
+2026-07-04 11:20:39.179 [INFO] Press Ctrl+C to exit.
+2026-07-04 11:20:39.627 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:20:40.266 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:20:40.338 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:20:42.166 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:20:42.862 [DEBUG] New WS connection opened on path: /ws/orders
+2026-07-04 11:20:44.122 [INFO] All matching engine order books cleared (system reset).
+2026-07-04 11:20:44.928 [DEBUG] New WS connection opened on path: /ws/orders
