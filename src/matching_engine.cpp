@@ -1,4 +1,5 @@
 #include "matching_engine.hpp"
+#include "logger.hpp"
 
 OrderBook& MatchingEngineManager::get_or_create_book(const std::string& symbol) {
     auto it = books_.find(symbol);
@@ -109,4 +110,10 @@ nlohmann::json MatchingEngineManager::get_bbo(const std::string& symbol) {
 nlohmann::json MatchingEngineManager::get_l2_depth(const std::string& symbol, int depth) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     return get_or_create_book(symbol).get_l2_depth(depth);
+}
+
+void MatchingEngineManager::reset() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    books_.clear();
+    LOG_INFO("All matching engine order books cleared (system reset).");
 }

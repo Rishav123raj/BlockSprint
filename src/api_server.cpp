@@ -111,6 +111,13 @@ void ApiServer::on_http(websocketpp::connection_hdl hdl) {
             return;
         } 
         
+        else if (method == "POST" && resource == "/api/reset") {
+            MatchingEngineManager::getInstance().reset();
+            nlohmann::json resp = {{"status", "success"}, {"message", "Matching engine state reset successfully"}};
+            write_http_response(hdl, websocketpp::http::status_code::ok, "application/json", resp.dump());
+            return;
+        }
+        
         else if (method == "DELETE" && resource == "/api/orders") {
             auto body = nlohmann::json::parse(con->get_request_body());
             if (!body.contains("symbol") || !body.contains("order_id")) {

@@ -33,6 +33,9 @@ public:
     // Synchronous state queries
     nlohmann::json get_bbo(const std::string& symbol);
     nlohmann::json get_l2_depth(const std::string& symbol, int depth = 10);
+    
+    // Clear all order books (reset state)
+    void reset();
 
 private:
     MatchingEngineManager() = default;

@@ -18,6 +18,15 @@ ENGINE_WS_URL = "ws://127.0.0.1:8080/ws/orders"
 # Structure: {(symbol, side, price): order_id}
 active_orders = {}
 
+def reset_engine():
+    """Call C++ REST endpoint /api/reset to ensure clean state before starting connector."""
+    try:
+        url = "http://127.0.0.1:8080/api/reset"
+        res = requests.post(url, timeout=2)
+        print("Matching engine state reset successfully before connector start.")
+    except Exception as e:
+        print(f"Could not reset matching engine: {e}")
+
 def get_order_id(symbol, side, price):
     """Generate a consistent, unique order ID for a Binance price level."""
     return f"BINANCE_{symbol.replace('-', '_')}_{side.upper()}_{float(price):.6f}"
@@ -116,61 +125,86 @@ async def sync_websocket_deltas(active_symbols):
     """
     3. Real-Time WebSocket Synchronization
     Listens to live Binance streams and synchronizes mutations.
+    Includes connection recovery logic to handle C++ server restarts.
     """
-    # Stream multiplex format: wss://stream.binance.com:9443/stream?streams=ethusdt@depth10@100ms/...
     streams = "/".join([f"{s.lower()}@depth10@100ms" for s in active_symbols])
     binance_ws_url = f"wss://stream.binance.com:9443/stream?streams={streams}"
     
-    print(f"Connecting to Binance WebSocket: {binance_ws_url}")
-    print(f"Connecting to BlockSprint WebSocket: {ENGINE_WS_URL}")
-    
-    async with websockets.connect(binance_ws_url) as binance_ws, \
-               websockets.connect(ENGINE_WS_URL) as engine_ws:
-               
-        # Start a background task to drain messages from engine_ws
-        drain_task = asyncio.create_task(drain_responses(engine_ws))
-        
+    while True:
         try:
-            # Bootstrap book snapshots first
-            await load_rest_snapshots(engine_ws, active_symbols)
+            # 1. Reset C++ engine to clean start before bootstrap snapshot
+            reset_engine()
             
-            print("Listening for real-time WebSocket book deltas...")
-            while True:
+            print(f"Connecting to Binance WebSocket: {binance_ws_url}")
+            print(f"Connecting to BlockSprint WebSocket: {ENGINE_WS_URL}")
+            
+            async with websockets.connect(binance_ws_url) as binance_ws, \
+                       websockets.connect(ENGINE_WS_URL) as engine_ws:
+                       
+                # Clear local active orders state when starting a new session
+                active_orders.clear()
+                
+                # Start a background task to drain messages from engine_ws
+                drain_task = asyncio.create_task(drain_responses(engine_ws))
+                
                 try:
-                    frame = await binance_ws.recv()
-                    msg = json.loads(frame)
+                    # Bootstrap book snapshots first
+                    await load_rest_snapshots(engine_ws, active_symbols)
                     
-                    stream = msg["stream"]
-                    data = msg["data"]
-                    
-                    # Format: "ETHUSDT" from stream name
-                    raw_symbol = stream.split("@")[0].upper()
-                    symbol = raw_symbol.replace("USDT", "-USDT")
-                    
-                    # Sync Bids
-                    for bid in data["bids"]:
-                        price, qty = float(bid[0]), float(bid[1])
-                        if qty == 0.0:
+                    print("Listening for real-time WebSocket book deltas...")
+                    while True:
+                        frame = await binance_ws.recv()
+                        msg = json.loads(frame)
+                        
+                        stream = msg["stream"]
+                        data = msg["data"]
+                        
+                        # Format: "ETHUSDT" from stream name
+                        raw_symbol = stream.split("@")[0].upper()
+                        symbol = raw_symbol.replace("USDT", "-USDT")
+                        
+                        # Sync Bids
+                        new_bid_prices = {float(bid[0]) for bid in data["bids"]}
+                        stale_bids = [
+                            price for (sym, side, price) in list(active_orders.keys())
+                            if sym == symbol and side == "buy" and price not in new_bid_prices
+                        ]
+                        for price in stale_bids:
                             await cancel_external_order(engine_ws, symbol, "buy", price)
-                        else:
-                            await submit_external_order(engine_ws, symbol, "buy", price, qty)
-                            
-                    # Sync Asks
-                    for ask in data["asks"]:
-                        price, qty = float(ask[0]), float(ask[1])
-                        if qty == 0.0:
+
+                        for bid in data["bids"]:
+                            price, qty = float(bid[0]), float(bid[1])
+                            if qty == 0.0:
+                                await cancel_external_order(engine_ws, symbol, "buy", price)
+                            else:
+                                await submit_external_order(engine_ws, symbol, "buy", price, qty)
+                                
+                        # Sync Asks
+                        new_ask_prices = {float(ask[0]) for ask in data["asks"]}
+                        stale_asks = [
+                            price for (sym, side, price) in list(active_orders.keys())
+                            if sym == symbol and side == "sell" and price not in new_ask_prices
+                        ]
+                        for price in stale_asks:
                             await cancel_external_order(engine_ws, symbol, "sell", price)
-                        else:
-                            await submit_external_order(engine_ws, symbol, "sell", price, qty)
-                            
-                except Exception as e:
-                    print(f"Sync error: {e}")
-                    await asyncio.sleep(1)
-        finally:
-            drain_task.cancel()
-            await asyncio.gather(drain_task, return_exceptions=True)
+
+                        for ask in data["asks"]:
+                            price, qty = float(ask[0]), float(ask[1])
+                            if qty == 0.0:
+                                await cancel_external_order(engine_ws, symbol, "sell", price)
+                            else:
+                                await submit_external_order(engine_ws, symbol, "sell", price, qty)
+                                
+                finally:
+                    drain_task.cancel()
+                    await asyncio.gather(drain_task, return_exceptions=True)
+                    
+        except Exception as e:
+            print(f"Connection lost or handshake failed: {e}. Retrying in 3 seconds...")
+            await asyncio.sleep(3)
 
 if __name__ == "__main__":
+    reset_engine()
     symbols = get_active_symbols(limit=5)
     try:
         asyncio.run(sync_websocket_deltas(symbols))
