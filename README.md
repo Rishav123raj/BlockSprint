@@ -43,11 +43,11 @@ graph TD
     end
 
     subgraph Clients_Consumers ["Clients & Consumers"]
-        REST_C[HTTP REST Taker / API User]
-        WS_MD_C[Market Data Stream Client]
-        WS_TR_C[Trades Stream Client]
-        WS_OE_C[Order Entry Stream Client]
-        INT_T[Interactive Trade Validator (interactive_test.py)]
+        REST_C["HTTP REST Taker / API User"]
+        WS_MD_C["Market Data Stream Client"]
+        WS_TR_C["Trades Stream Client"]
+        WS_OE_C["Order Entry Stream Client"]
+        INT_T["Interactive Trade Validator (interactive_test.py)"]
     end
 
     subgraph BlockSprint_API_Server ["BlockSprint API Server (Port 8080)"]
@@ -63,8 +63,8 @@ graph TD
     end
 
     subgraph Thread_Safe_Routing_Manager ["Thread-Safe Routing Manager"]
-        MEM[MatchingEngineManager]
-        MUTEX[std::recursive_mutex]
+        MEM["MatchingEngineManager"]
+        MUTEX["std::recursive_mutex"]
         REGISTRY["books_ (hash map : symbol -> OrderBook)"]
     end
 
