@@ -1,10 +1,26 @@
-2026-07-04 10:00:19,435 [INFO] Matching engine state reset successfully before benchmark.
-2026-07-04 10:00:19,437 [INFO] Connecting to ws://127.0.0.1:8080/ws/orders...
-2026-07-04 10:00:19,437 [INFO] Running benchmark on TEST-USDT with baseline price 100.00
-2026-07-04 10:00:19,489 [INFO] Connected! Generating orders...
-2026-07-04 10:00:22,221 [INFO] === Benchmark Results ===
-2026-07-04 10:00:22,222 [INFO] Total Orders Submitted: 5000
-2026-07-04 10:00:22,222 [INFO] Total Matches (Trades): 3891
-2026-07-04 10:00:22,222 [INFO] Total Time Taken:      2.7323 seconds
-2026-07-04 10:00:22,222 [INFO] Throughput:            1829.96 orders/sec
-2026-07-04 10:00:22,222 [INFO] =========================
+2026-07-04 16:56:13,683 [INFO] Matching engine state reset successfully before benchmark.
+2026-07-04 16:56:14,124 [INFO] Connecting to ws://127.0.0.1:8080/ws/orders...
+2026-07-04 16:56:14,126 [INFO] Running benchmark on ETH-USDT with baseline price 1757.88
+2026-07-04 16:56:14,297 [INFO] Connected! Generating and sending orders...
+2026-07-04 16:56:17,139 [INFO] ==================================================
+2026-07-04 16:56:17,140 [INFO]           BlockSprint Benchmark Metrics Report    
+2026-07-04 16:56:17,140 [INFO] ==================================================
+2026-07-04 16:56:17,141 [INFO] Target Symbol:          ETH-USDT
+2026-07-04 16:56:17,141 [INFO] Total Orders Sent:      5000
+2026-07-04 16:56:17,141 [INFO] Confirmations Received: 5000
+2026-07-04 16:56:17,142 [INFO]   - Success:            5000
+2026-07-04 16:56:17,142 [INFO]   - Error/Rejected:     0
+2026-07-04 16:56:17,142 [INFO] Total Matches (Trades): 4272
+2026-07-04 16:56:17,143 [INFO] Elapsed Time:           2.8405 seconds
+2026-07-04 16:56:17,143 [INFO] Sustained Throughput:   1760.24 orders/sec
+2026-07-04 16:56:17,144 [INFO] --------------------------------------------------
+2026-07-04 16:56:17,144 [INFO] Round-Trip Latency Statistics (WebSocket RTT):
+2026-07-04 16:56:17,144 [INFO]   - Min Latency:        3305.20 탎
+2026-07-04 16:56:17,145 [INFO]   - Average Latency:    55383.84 탎
+2026-07-04 16:56:17,145 [INFO]   - Median (p50):       49047.80 탎
+2026-07-04 16:56:17,146 [INFO]   - 90th Percentile:    97452.10 탎
+2026-07-04 16:56:17,146 [INFO]   - 95th Percentile:    108813.70 탎
+2026-07-04 16:56:17,146 [INFO]   - 99th Percentile:    188933.90 탎
+2026-07-04 16:56:17,147 [INFO]   - 99.9th Percentile:  200300.70 탎
+2026-07-04 16:56:17,147 [INFO]   - Max Latency:        200443.10 탎
+2026-07-04 16:56:17,147 [INFO] ==================================================

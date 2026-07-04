@@ -155,6 +155,8 @@ python scripts/run_all.py
 ```
 *Verification*: Follow the terminal prompts to select a pair (e.g. `ETH-USDT`) and place simulated orders (e.g., `BUY`, `LIMIT`, `price`, `qty`) to verify expected matching engine invariants.
 
+![Unified Harness Execution Run](output/run1.PNG)
+
 ---
 
 ### Method B: Manual Step-by-Step Execution
@@ -207,11 +209,15 @@ uv run scripts/interactive_test.py
 ```
 This launches a CLI prompting you for trade parameters, fetches live market depth, submits the order to BlockSprint, and asserts that the executed trades match the price-time rules exactly.
 
+![Interactive Trade Verification Report](output/run2.PNG)
+
 #### 7. Run WebSocket Throughput Benchmark
 ```powershell
 uv run scripts/perf_test.py
 ```
 Outputs performance benchmarks for bulk order processing inside [`logs/perf_test.log`](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/logs/perf_test.log).
+
+![WebSocket Throughput Benchmark Report](output/perf_test.PNG)
 
 ---
 
