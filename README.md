@@ -1,9 +1,11 @@
 # BlockSprint - Ultra-Low-Latency Crypto Matching Engine
 
 [![C++ 17](https://img.shields.io/badge/C%2B%2B-17-blue.svg?style=flat-square)](https://en.cppreference.com/w/cpp/17)
-[![Python 3.12](https://img.shields.io/badge/Python-3.12-blue.svg?style=flat-square)](https://www.python.org/)
+[![Python 3.13](https://img.shields.io/badge/Python-3.13-blue.svg?style=flat-square)](https://www.python.org/)
 [![Platform Windows](https://img.shields.io/badge/Platform-Windows-lightgrey.svg?style=flat-square)](#)
 [![License MIT](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](#)
+
+> **Branch note:** this is the `v2` development branch for BlockSprint 2.0 (Market Microstructure-Aware Backtesting & Execution Simulator). See [blocksprint_2.0_implementation_plan.md](blocksprint_2.0_implementation_plan.md). The frozen 1.0 release lives at tag `v1.0.0` / branch `release/v1`. The description below still covers the 1.0 feature set.
 
 BlockSprint is an ultra-high-performance cryptocurrency matching engine built in modern **C++17**. It implements core trading execution rules based on REG NMS-inspired principles of strict **Price-Time Priority (FIFO)** and **Internal Order Protection (Anti-Trade-Through)**, coupled with a low-latency network API supporting REST HTTP requests and multi-feed WebSocket subscriptions.
 
@@ -142,7 +144,7 @@ For Python scripts, dependencies are defined in `pyproject.toml` and managed via
 ### Prerequisites
 * **Compiler**: Visual Studio 2022 with MSVC (C++17 support)
 * **Build tool**: CMake (version 3.15 or higher)
-* **Scripting**: Python (version 3.12 or higher)
+* **Scripting**: Python (version 3.13 or higher)
 
 ### Method A: Unified Harness Execution (Recommended)
 
@@ -162,16 +164,13 @@ python scripts/run_all.py
 ### Method B: Manual Step-by-Step Execution
 
 #### 1. Setup Environment
-Ensure you have a `.env` file in the root directory containing your Binance API keys (the connector uses them to fetch and mirror public endpoints):
-```ini
-BINANCE_API_KEY=your_binance_api_key_here
-BINANCE_API_SECRET=your_binance_api_secret_here
-```
+No Binance API key is needed: the connector only uses public market-data endpoints.
+
 Install the Python requirements:
 ```powershell
-uv add requests python-dotenv websockets
+uv sync
 # or standard pip:
-pip install requests python-dotenv websockets
+pip install requests websockets
 ```
 
 #### 2. Configure & Build C++ Binaries
@@ -182,14 +181,16 @@ cmake --build build --config Release
 ```
 This produces two executables:
 * `build\Release\crypto_matching_engine.exe` (Production API and Matching Engine server)
-* `build\Release\run_tests.exe` (Engine unit test suite)
+* `build\Release\unit_tests.exe` (Engine unit test suite, doctest)
 
 #### 3. Run Automated Unit Tests
 Before launching the server, execute the unit tests to assert book invariants:
 ```powershell
-.\build\Release\run_tests.exe
+.\build\Release\unit_tests.exe
+# or through CTest:
+ctest --test-dir build -C Release --output-on-failure
 ```
-Verify the output log [`logs/matching_engine.log`](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/logs/matching_engine.log) contains `Passes: 6, Failures: 0`.
+The summary is printed to the console and must end with `Status: SUCCESS!`.
 
 #### 4. Run the Matching Engine Server
 ```powershell
@@ -228,23 +229,31 @@ BlockSprint/
 ├── CMakeLists.txt              # CMake build generation rules
 ├── pyproject.toml              # Python project dependencies definition
 ├── uv.lock                     # Lock file for Python dependencies
-├── .env                        # Configuration file for API keys
 ├── .gitignore                  # Git patterns to ignore
 ├── binance_integration_guide.md# Detailed technical guide for Binance live synchronization
 ├── command.md                  # Quick CLI command reference guide
 ├── README.md                   # Main project overview (this file)
 │
 ├── src/                        # C++ Matching Engine Codebase
-│   ├── models.hpp              # Order and trade structs with json serializers
+│   ├── core/                   # engine_core library (no networking)
+│   │   ├── types.hpp/.cpp      # Fixed-point prices/quantities (1e-8 units), exact decimal parsing
+│   │   ├── clock.hpp           # IClock, WallClock (live), SimClock (replay)
+│   │   ├── models.hpp          # Order and trade structs with json serializers
+│   │   ├── order_book.hpp/.cpp # Core order book queues and matching algorithms
+│   │   └── matching_engine.hpp/.cpp # Thread-safe manager & cross-symbol registry
+│   ├── api/
+│   │   └── api_server.hpp/.cpp # HTTP REST and WebSocket router endpoints
 │   ├── logger.hpp              # Thread-safe timezone-aware logging
-│   ├── order_book.hpp/.cpp     # Core L2 order book queues and matching algorithms
-│   ├── matching_engine.hpp/.cpp# Thread-safe manager & cross-symbol registry
-│   ├── api_server.hpp/.cpp     # HTTP REST and WebSocket router endpoints
 │   └── main.cpp                # Application startup and OS signal handling
 │
-├── tests/                      # Verification and Test Harnesses
-│   ├── test_harness.hpp        # Lightweight assertion and suite execution runner
-│   └── main_test.cpp           # Matching engine unit tests
+├── tests/core/                 # doctest unit tests (unit_tests target)
+│   ├── matching_test.cpp       # The six original 1.0 unit tests
+│   ├── characterization_test.cpp # Pins exact 1.0 matching behavior for the 2.0 refactors
+│   ├── test_helpers.hpp        # Order builders and engine reset fixture
+│   └── test_main.cpp           # doctest entry point
+│
+├── research/data/              # 2.0 market-data recorder, raw archive I/O, quality inspector
+│                               #   (see docs/recorder_ops.md)
 │
 ├── scripts/                    # Python Validation and Benchmarking Clients
 │   ├── run_all.py              # Unified project builder, daemon manager, and validation script
@@ -276,7 +285,7 @@ BlockSprint/
 
 ## 6. Unit Testing Matrix
 
-The automated unit tests implemented in [`tests/main_test.cpp`](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/tests/main_test.cpp) verify key behaviors:
+The original unit tests in [`tests/core/matching_test.cpp`](tests/core/matching_test.cpp) verify key behaviors. [`tests/core/characterization_test.cpp`](tests/core/characterization_test.cpp) adds 21 cases that pin the exact 1.0 behavior, including a golden hash over a seeded 5,000-operation random workload.
 
 | Test Case Name | Target Behaviors / Invariants Tested | Verification Mechanism |
 | :--- | :--- | :--- |
@@ -284,5 +293,5 @@ The automated unit tests implemented in [`tests/main_test.cpp`](file:///c:/Users
 | `internal_trade_through_protection` | Multi-level price sweeping protection (anti-trade-through). | Rest asks at different prices; sweeps asks; verifies price level increments sequentially. |
 | `ioc_order_handling` | Immediate execution or cancellation. | Places buy IOC exceeding ask quantity; verifies immediate partial fill and remaining balance cancellation. |
 | `fok_order_handling` | Pre-flight dry-run check. | Attempts FOK order above liquidity (fails/kills) and equal to liquidity (executes); verifies book consistency. |
-| `order_cancel_constant_time` | $O(1)$ order cancellations. | Places orders; cancels them; validates cancellation succeeds in constant time with clean removal from maps/queues. |
-| `matching_engine_routing` | Multi-symbol isolation and concurrency. | Exercises thread-safe routing manager; validates concurrent symbol allocations do not leak states across books. |
+| `order_cancellation` | $O(1)$ order cancellations. | Places a resting order; cancels it; verifies the book is empty and a second cancel of the same ID fails. |
+| `order_modification` | Priority rules on amend. | Reduces the quantity of the first order at a level; sweeps the level; verifies it kept time priority. |
