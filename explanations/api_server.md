@@ -1,4 +1,4 @@
-# File: src/api_server.hpp & src/api_server.cpp
+# File: src/api/api_server.hpp & src/api/api_server.cpp
 
 This component implements the networking layer, hosting the HTTP REST endpoints and managing WebSocket clients subscribing to streaming feeds.
 

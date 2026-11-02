@@ -1,10 +1,25 @@
 #include "matching_engine.hpp"
 #include "logger.hpp"
 
-OrderBook& MatchingEngineManager::get_or_create_book(const std::string& symbol) {
+MatchingEngine::MatchingEngine(std::shared_ptr<const IClock> clock, EngineOptions options)
+    : clock_(std::move(clock)), options_(options) {
+    if (!clock_) {
+        throw std::invalid_argument("MatchingEngine requires a clock");
+    }
+}
+
+std::unique_lock<std::recursive_mutex> MatchingEngine::lock() const {
+    std::unique_lock<std::recursive_mutex> guard(mutex_, std::defer_lock);
+    if (options_.thread_safe) {
+        guard.lock();
+    }
+    return guard;
+}
+
+OrderBook& MatchingEngine::get_or_create_book(const std::string& symbol) {
     auto it = books_.find(symbol);
     if (it == books_.end()) {
-        auto book = std::make_unique<OrderBook>(symbol);
+        auto book = std::make_unique<OrderBook>(symbol, *clock_, trade_id_seq_);
         auto& ref = *book;
         books_[symbol] = std::move(book);
         return ref;
@@ -12,8 +27,8 @@ OrderBook& MatchingEngineManager::get_or_create_book(const std::string& symbol) 
     return *(it->second);
 }
 
-std::vector<Trade> MatchingEngineManager::submit_order(std::shared_ptr<Order> order) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+std::vector<Trade> MatchingEngine::submit_order(std::shared_ptr<Order> order) {
+    auto guard = lock();
     
     auto& book = get_or_create_book(order->symbol);
     
@@ -53,8 +68,8 @@ std::vector<Trade> MatchingEngineManager::submit_order(std::shared_ptr<Order> or
     return trades;
 }
 
-bool MatchingEngineManager::cancel_order(const std::string& symbol, const std::string& order_id) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+bool MatchingEngine::cancel_order(const std::string& symbol, const std::string& order_id) {
+    auto guard = lock();
     
     auto& book = get_or_create_book(symbol);
     
@@ -74,8 +89,8 @@ bool MatchingEngineManager::cancel_order(const std::string& symbol, const std::s
     return success;
 }
 
-bool MatchingEngineManager::modify_order(const std::string& symbol, const std::string& order_id, double new_qty, double new_price, std::vector<Trade>& generated_trades) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+bool MatchingEngine::modify_order(const std::string& symbol, const std::string& order_id, Quantity new_qty, Price new_price, std::vector<Trade>& generated_trades) {
+    auto guard = lock();
     
     auto& book = get_or_create_book(symbol);
     
@@ -102,18 +117,28 @@ bool MatchingEngineManager::modify_order(const std::string& symbol, const std::s
     return success;
 }
 
-nlohmann::json MatchingEngineManager::get_bbo(const std::string& symbol) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+nlohmann::json MatchingEngine::get_bbo(const std::string& symbol) {
+    auto guard = lock();
     return get_or_create_book(symbol).get_bbo();
 }
 
-nlohmann::json MatchingEngineManager::get_l2_depth(const std::string& symbol, int depth) {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+nlohmann::json MatchingEngine::get_l2_depth(const std::string& symbol, int depth) {
+    auto guard = lock();
     return get_or_create_book(symbol).get_l2_depth(depth);
 }
 
-void MatchingEngineManager::reset() {
-    std::lock_guard<std::recursive_mutex> lock(mutex_);
+std::vector<std::string> MatchingEngine::check_invariants(const std::string& symbol) {
+    auto guard = lock();
+    return get_or_create_book(symbol).check_invariants();
+}
+
+bool MatchingEngine::is_crossed(const std::string& symbol) {
+    auto guard = lock();
+    return get_or_create_book(symbol).is_crossed();
+}
+
+void MatchingEngine::reset() {
+    auto guard = lock();
     books_.clear();
     LOG_INFO("All matching engine order books cleared (system reset).");
 }

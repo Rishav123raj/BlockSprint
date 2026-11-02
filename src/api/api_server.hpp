@@ -1,5 +1,6 @@
 #pragma once
-#include "models.hpp"
+#include "core/matching_engine.hpp"
+#include "core/models.hpp"
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
 #include <set>
@@ -12,7 +13,8 @@ typedef websocketpp::server<websocketpp::config::asio> WsServerType;
 
 class ApiServer {
 public:
-    ApiServer();
+    // The engine must outlive the server.
+    explicit ApiServer(MatchingEngine& engine);
     ~ApiServer();
 
     // Starts the server on the specified port. This method blocks or spawns a thread.
@@ -41,6 +43,7 @@ private:
                              const std::string& content_type, 
                              const std::string& body);
 
+    MatchingEngine& engine_;
     WsServerType server_;
     std::unique_ptr<std::thread> server_thread_;
     

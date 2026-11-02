@@ -1,12 +1,15 @@
 #pragma once
+#include <cstdint>
+#include <ctime>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <list>
 #include <memory>
-#include <chrono>
 #include <sstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
+#include "types.hpp"
 
 enum class OrderType {
     LIMIT,
@@ -60,9 +63,9 @@ struct Order {
     std::string symbol;
     OrderType order_type;
     Side side;
-    double price; // Only relevant for limit/ioc/fok
-    double quantity;
-    double remaining_quantity;
+    Price price = 0; // Only relevant for limit/ioc/fok
+    Quantity quantity = 0;
+    Quantity remaining_quantity = 0;
     uint64_t timestamp;
     bool is_cancelled = false;
 
@@ -75,19 +78,13 @@ struct Order {
 struct Trade {
     std::string trade_id;
     std::string symbol;
-    double price;
-    double quantity;
+    Price price;
+    Quantity quantity;
     Side aggressor_side;
     std::string maker_order_id;
     std::string taker_order_id;
     uint64_t timestamp;
 };
-
-inline uint64_t getCurrentTimestampNs() {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::system_clock::now().time_since_epoch()
-    ).count();
-}
 
 inline std::string formatIsoTimestamp(uint64_t timestamp_ns) {
     auto secs = timestamp_ns / 1000000000ULL;
@@ -115,8 +112,8 @@ inline void to_json(nlohmann::json& j, const Trade& t) {
         {"timestamp", formatIsoTimestamp(t.timestamp)},
         {"symbol", t.symbol},
         {"trade_id", t.trade_id},
-        {"price", std::to_string(t.price)},
-        {"quantity", std::to_string(t.quantity)},
+        {"price", format_legacy(t.price)},
+        {"quantity", format_legacy(t.quantity)},
         {"aggressor_side", sideToString(t.aggressor_side)},
         {"maker_order_id", t.maker_order_id},
         {"taker_order_id", t.taker_order_id}

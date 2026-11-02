@@ -1,46 +1,93 @@
 cmake_minimum_required(VERSION 3.15)
-project(CryptoTradingEngine CXX)
+project(BlockSprint VERSION 2.0.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Configure include directories for local external dependencies
-include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/external
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/asio/asio/include
-    ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/src
-)
-
-# Compiler definitions for WebSocket++ and standalone Asio
-add_compile_definitions(
-    ASIO_STANDALONE
-    _WEBSOCKETPP_CPP11_STL_
-)
-
-# MSVC specific compiler flags for warning levels and optimization
-if(MSVC)
-    add_compile_options(/W4 /EHsc)
-    add_compile_options($<$<CONFIG:Release>:/O2>)
-else()
-    add_compile_options(-Wall -Wextra -O3)
+# Default to Release for single-config generators (Ninja, Makefiles)
+if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# Source Files
-set(SRC_FILES
-    src/order_book.cpp
-    src/matching_engine.cpp
-    src/api_server.cpp
-)
+option(BLOCKSPRINT_BUILD_SERVER "Build the live REST/WebSocket server" ON)
+option(BLOCKSPRINT_BUILD_TESTS "Build the unit tests" ON)
 
-# Main Executable
-add_executable(crypto_matching_engine
-    src/main.cpp
-    ${SRC_FILES}
-)
+find_package(Threads REQUIRED)
 
-# Unit Tests Executable
-add_executable(run_tests
-    tests/main_test.cpp
-    ${SRC_FILES}
+# Warning flags applied to BlockSprint's own targets only (not vendored code)
+function(blocksprint_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /EHsc)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra)
+    endif()
+endfunction()
+
+# ---------------------------------------------------------------------------
+# engine_core: matching engine library (no networking)
+# ---------------------------------------------------------------------------
+add_library(engine_core STATIC
+    src/core/types.cpp
+    src/core/order_book.cpp
+    src/core/matching_engine.cpp
 )
+target_include_directories(engine_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/core
+)
+target_include_directories(engine_core SYSTEM PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/external
+)
+blocksprint_warnings(engine_core)
+
+# ---------------------------------------------------------------------------
+# api + crypto_matching_engine: live REST/WebSocket server
+# ---------------------------------------------------------------------------
+if(BLOCKSPRINT_BUILD_SERVER)
+    add_library(api STATIC
+        src/api/api_server.cpp
+    )
+    target_include_directories(api SYSTEM PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/asio/asio/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/websocketpp
+    )
+    # _WEBSOCKETPP_CPP11_THREAD_: websocketpp disables std::thread on MinGW by default
+    target_compile_definitions(api PUBLIC
+        ASIO_STANDALONE
+        _WEBSOCKETPP_CPP11_STL_
+        _WEBSOCKETPP_CPP11_THREAD_
+    )
+    target_link_libraries(api PUBLIC engine_core Threads::Threads)
+    if(WIN32)
+        target_link_libraries(api PUBLIC ws2_32 mswsock)
+    endif()
+    blocksprint_warnings(api)
+
+    add_executable(crypto_matching_engine src/main.cpp)
+    target_link_libraries(crypto_matching_engine PRIVATE api)
+    blocksprint_warnings(crypto_matching_engine)
+endif()
+
+# ---------------------------------------------------------------------------
+# unit_tests: doctest unit tests (link engine_core only)
+# ---------------------------------------------------------------------------
+if(BLOCKSPRINT_BUILD_TESTS)
+    enable_testing()
+
+    add_executable(unit_tests
+        tests/core/test_main.cpp
+        tests/core/matching_test.cpp
+        tests/core/characterization_test.cpp
+        tests/core/invariant_test.cpp
+        tests/core/types_test.cpp
+        tests/core/engine_test.cpp
+    )
+    target_include_directories(unit_tests SYSTEM PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest
+    )
+    target_link_libraries(unit_tests PRIVATE engine_core Threads::Threads)
+    blocksprint_warnings(unit_tests)
+
+    add_test(NAME unit_tests COMMAND unit_tests)
+endif()

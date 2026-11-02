@@ -1,4 +1,4 @@
-# File: src/order_book.hpp & src/order_book.cpp
+# File: src/core/order_book.hpp & src/core/order_book.cpp
 
 This component implements the core order book data structure, price-time priority queues (FIFO), matching algorithms, order cancellations, and modification logic for a single trading pair.
 

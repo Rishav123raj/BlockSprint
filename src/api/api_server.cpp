@@ -1,10 +1,24 @@
 #include "api_server.hpp"
-#include "matching_engine.hpp"
 #include "logger.hpp"
 #include <nlohmann/json.hpp>
 #include <exception>
+#include <stdexcept>
 
-ApiServer::ApiServer() {
+namespace {
+
+// Exact decimal parse of a price or quantity field (no binary floating point involved)
+int64_t parse_decimal_field(const std::string& text, const char* field) {
+    auto value = parse_fixed(text);
+    if (!value) {
+        throw std::invalid_argument(std::string("Invalid ") + field + " '" + text +
+                                    "': expected a non-negative decimal with at most 8 decimal places");
+    }
+    return *value;
+}
+
+} // namespace
+
+ApiServer::ApiServer(MatchingEngine& engine) : engine_(engine) {
     // Suppress WebSocket++ default logging to let our Logger handle diagnostics
     server_.clear_access_channels(websocketpp::log::alevel::all);
     server_.clear_error_channels(websocketpp::log::elevel::all);
@@ -87,15 +101,15 @@ void ApiServer::on_http(websocketpp::connection_hdl hdl) {
             }
 
             auto order = std::make_shared<Order>();
-            order->order_id = body.contains("order_id") ? body["order_id"].get<std::string>() : std::to_string(getCurrentTimestampNs());
+            order->order_id = body.contains("order_id") ? body["order_id"].get<std::string>() : std::to_string(engine_.clock().now_ns());
             order->symbol = body["symbol"].get<std::string>();
             order->order_type = stringToOrderType(body["order_type"].get<std::string>());
             order->side = stringToSide(body["side"].get<std::string>());
-            order->quantity = std::stod(body["quantity"].get<std::string>());
-            order->price = (order->order_type != OrderType::MARKET && body.contains("price")) ? std::stod(body["price"].get<std::string>()) : 0.0;
-            order->timestamp = getCurrentTimestampNs();
+            order->quantity = parse_decimal_field(body["quantity"].get<std::string>(), "quantity");
+            order->price = (order->order_type != OrderType::MARKET && body.contains("price")) ? parse_decimal_field(body["price"].get<std::string>(), "price") : 0;
+            order->timestamp = engine_.clock().now_ns();
 
-            std::vector<Trade> trades = MatchingEngineManager::getInstance().submit_order(order);
+            std::vector<Trade> trades = engine_.submit_order(order);
 
             nlohmann::json trades_arr = nlohmann::json::array();
             for (const auto& t : trades) {
@@ -112,7 +126,7 @@ void ApiServer::on_http(websocketpp::connection_hdl hdl) {
         } 
         
         else if (method == "POST" && resource == "/api/reset") {
-            MatchingEngineManager::getInstance().reset();
+            engine_.reset();
             nlohmann::json resp = {{"status", "success"}, {"message", "Matching engine state reset successfully"}};
             write_http_response(hdl, websocketpp::http::status_code::ok, "application/json", resp.dump());
             return;
@@ -129,7 +143,7 @@ void ApiServer::on_http(websocketpp::connection_hdl hdl) {
             std::string symbol = body["symbol"].get<std::string>();
             std::string order_id = body["order_id"].get<std::string>();
 
-            bool success = MatchingEngineManager::getInstance().cancel_order(symbol, order_id);
+            bool success = engine_.cancel_order(symbol, order_id);
             if (success) {
                 nlohmann::json resp = {{"status", "success"}, {"message", "Order cancelled"}};
                 write_http_response(hdl, websocketpp::http::status_code::ok, "application/json", resp.dump());
@@ -153,7 +167,7 @@ void ApiServer::on_http(websocketpp::connection_hdl hdl) {
                 return;
             }
 
-            nlohmann::json bbo = MatchingEngineManager::getInstance().get_bbo(symbol);
+            nlohmann::json bbo = engine_.get_bbo(symbol);
             write_http_response(hdl, websocketpp::http::status_code::ok, "application/json", bbo.dump());
             return;
         } 
@@ -171,7 +185,7 @@ void ApiServer::on_http(websocketpp::connection_hdl hdl) {
                 return;
             }
 
-            nlohmann::json depth = MatchingEngineManager::getInstance().get_l2_depth(symbol, 10);
+            nlohmann::json depth = engine_.get_l2_depth(symbol, 10);
             write_http_response(hdl, websocketpp::http::status_code::ok, "application/json", depth.dump());
             return;
         }
@@ -222,15 +236,15 @@ void ApiServer::on_message(websocketpp::connection_hdl hdl, WsServerType::messag
 
             if (action == "submit") {
                 auto order = std::make_shared<Order>();
-                order->order_id = body.contains("order_id") ? body["order_id"].get<std::string>() : std::to_string(getCurrentTimestampNs());
+                order->order_id = body.contains("order_id") ? body["order_id"].get<std::string>() : std::to_string(engine_.clock().now_ns());
                 order->symbol = body.at("symbol").get<std::string>();
                 order->order_type = stringToOrderType(body.at("order_type").get<std::string>());
                 order->side = stringToSide(body.at("side").get<std::string>());
-                order->quantity = std::stod(body.at("quantity").get<std::string>());
-                order->price = (order->order_type != OrderType::MARKET && body.contains("price")) ? std::stod(body["price"].get<std::string>()) : 0.0;
-                order->timestamp = getCurrentTimestampNs();
+                order->quantity = parse_decimal_field(body.at("quantity").get<std::string>(), "quantity");
+                order->price = (order->order_type != OrderType::MARKET && body.contains("price")) ? parse_decimal_field(body["price"].get<std::string>(), "price") : 0;
+                order->timestamp = engine_.clock().now_ns();
 
-                std::vector<Trade> trades = MatchingEngineManager::getInstance().submit_order(order);
+                std::vector<Trade> trades = engine_.submit_order(order);
 
                 nlohmann::json trades_arr = nlohmann::json::array();
                 for (const auto& t : trades) {
@@ -248,7 +262,7 @@ void ApiServer::on_message(websocketpp::connection_hdl hdl, WsServerType::messag
                 std::string symbol = body.at("symbol").get<std::string>();
                 std::string order_id = body.at("order_id").get<std::string>();
 
-                bool success = MatchingEngineManager::getInstance().cancel_order(symbol, order_id);
+                bool success = engine_.cancel_order(symbol, order_id);
                 nlohmann::json resp = {
                     {"status", success ? "success" : "error"},
                     {"order_id", order_id},

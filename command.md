@@ -9,16 +9,13 @@ This document lists the exact sequence of terminal commands needed to build, tes
 Before executing the binaries, install all C++ dependencies (cached locally) and Python requirements:
 
 ```powershell
-# 1. Install Python dependencies inside your environment
-uv add requests python-dotenv websockets
+# Install Python dependencies inside your environment
+uv sync
 # or standard pip:
-pip install requests python-dotenv websockets
-
-# 2. Configure credentials
-# Ensure you have a .env file in the root containing:
-# BINANCE_API_KEY=your_key
-# BINANCE_API_SECRET=your_secret
+pip install requests websockets
 ```
+
+No Binance API key is required: only public market-data endpoints are used.
 
 ---
 
@@ -35,7 +32,7 @@ cmake --build build --config Release
 ```
 This produces two executables under the `build\Release\` directory:
 - `crypto_matching_engine.exe` (Production API and Matching Engine server)
-- `run_tests.exe` (Engine unit test suite)
+- `unit_tests.exe` (Engine unit test suite, doctest)
 
 ---
 
@@ -44,13 +41,12 @@ This produces two executables under the `build\Release\` directory:
 Before launching any services, run the unit test binary to ensure the FIFO queue priority, trade-through protection, cancellations, and order types are behaving correctly:
 
 ```powershell
-# Run the test harness
-.\build\Release\run_tests.exe
+# Run the test suite
+.\build\Release\unit_tests.exe
 ```
-*Expected Verification*: Check [`logs/matching_engine.log`](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/logs/matching_engine.log). It must contain:
+*Expected Verification*: the console summary ends with:
 ```text
-Passes: 6
-Failures: 0
+[doctest] Status: SUCCESS!
 ```
 
 ---

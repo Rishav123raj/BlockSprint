@@ -1,4 +1,4 @@
-# File: src/models.hpp
+# File: src/core/models.hpp
 
 This file defines the basic structures, enumerations, timestamps, and JSON serialization functions used throughout the application. It acts as the common data contract between the trading engine core, network layers, and test suites.
 

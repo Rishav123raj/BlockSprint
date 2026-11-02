@@ -1,5 +1,5 @@
-#include "matching_engine.hpp"
-#include "api_server.hpp"
+#include "core/matching_engine.hpp"
+#include "api/api_server.hpp"
 #include "logger.hpp"
 #include <iostream>
 #include <csignal>
@@ -18,22 +18,23 @@ int main() {
 
     LOG_INFO("=== Starting Crypto Trading Engine ===");
 
-    ApiServer server;
+    MatchingEngine engine;
+    ApiServer server(engine);
 
     // Hook up matching engine events to WebSocket broadcast feeds
-    MatchingEngineManager::getInstance().register_bbo_callback(
+    engine.register_bbo_callback(
         [&server](const std::string& symbol, const nlohmann::json& bbo) {
             server.broadcast_bbo(symbol, bbo);
         }
     );
 
-    MatchingEngineManager::getInstance().register_depth_callback(
+    engine.register_depth_callback(
         [&server](const std::string& symbol, const nlohmann::json& depth) {
             server.broadcast_depth(symbol, depth);
         }
     );
 
-    MatchingEngineManager::getInstance().register_trade_callback(
+    engine.register_trade_callback(
         [&server](const std::string& symbol, const Trade& trade) {
             server.broadcast_trade(symbol, trade);
         }

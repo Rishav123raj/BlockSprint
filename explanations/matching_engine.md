@@ -1,4 +1,4 @@
-# File: src/matching_engine.hpp & src/matching_engine.cpp
+# File: src/core/matching_engine.hpp & src/core/matching_engine.cpp
 
 This component manages multiple `OrderBook` instances (one per symbol), routes incoming orders to their correct books, ensures thread safety, and dispatches events (BBO, L2 depth, and trades) to register callbacks.
 
