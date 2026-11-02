@@ -2,13 +2,8 @@ import asyncio
 import websockets
 import json
 import requests
-import os
-from dotenv import load_dotenv
 
-# Load API credentials from .env file
-load_dotenv()
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET")
+# Only public Binance market-data endpoints are used, so no API key is required.
 
 # BlockSprint REST API configuration
 ENGINE_REST_URL = "http://127.0.0.1:8080/api/orders"

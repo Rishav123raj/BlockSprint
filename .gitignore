@@ -2,6 +2,7 @@
 __pycache__/
 *.py[oc]
 build/
+build-*/
 dist/
 wheels/
 *.egg-info
@@ -9,4 +10,10 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Runtime output
 logs/
+
+# BlockSprint 2.0 data lake and simulation results
+data/
+results/

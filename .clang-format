@@ -1,0 +1,11 @@
+# Matches the existing BlockSprint style: 4-space indent, attached braces.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 120
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+PointerAlignment: Left
+AccessModifierOffset: -4
+NamespaceIndentation: None
+SortIncludes: false

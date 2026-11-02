@@ -1,5 +1,7 @@
 # BlockSprint - Binance Live Order Book Integration Guide
 
+> **Historical design note (1.0).** The snippets below were written before implementation and use `python-binance` and `pandas`, which are not project dependencies. The shipped connector is [scripts/binance_connector.py](scripts/binance_connector.py), which uses only `requests` and `websockets`. BlockSprint 2.0 replaces this mirroring approach (see [backtesting_simulator_integration_guide.md](backtesting_simulator_integration_guide.md), §7).
+
 This guide details the implementation path to connect **BlockSprint** to the live Binance Order Book API. It shows how to discover symbols, initialize the book using REST snapshots, sync real-time book updates using WebSockets, and modify the C++ engine to handle external liquidity.
 
 ---
