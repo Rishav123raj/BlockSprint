@@ -15,5 +15,5 @@ wheels/
 logs/
 
 # BlockSprint 2.0 data lake and simulation results
-data/
-results/
+/data/
+/results/

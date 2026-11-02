@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, v2, "release/**"]
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows / MSVC
+            os: windows-latest
+            configure: cmake -B build
+            build: cmake --build build --config Release
+            test: ctest --test-dir build -C Release --output-on-failure
+          - name: Linux / GCC
+            os: ubuntu-latest
+            configure: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
+            build: cmake --build build -j 4
+            test: ctest --test-dir build --output-on-failure
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: ${{ matrix.configure }}
+
+      - name: Build
+        run: ${{ matrix.build }}
+
+      - name: Unit tests
+        run: ${{ matrix.test }}
+
+  python-tests:
+    name: Python / pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync
+      - name: pytest
+        run: uv run pytest -q
+
+# A gitleaks secret-scan job is deferred until the decision on purging the old .env commit
+# (commit f5d4b49) from history: a full-history scan would fail on it until then.

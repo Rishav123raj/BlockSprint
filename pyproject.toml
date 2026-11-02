@@ -1,11 +1,20 @@
 [project]
 name = "crypto-trading-engine"
-version = "0.1.0"
-description = "Add your description here"
+version = "2.0.0.dev0"
+description = "BlockSprint - C++ matching engine and microstructure-aware backtesting & execution simulator"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "dotenv>=0.9.9",
     "requests>=2.34.2",
     "websockets>=16.0",
+    "zstandard>=0.23",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]
+pythonpath = ["."]
