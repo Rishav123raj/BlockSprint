@@ -164,6 +164,13 @@ python scripts/run_all.py
 ### Method B: Manual Step-by-Step Execution
 
 #### 1. Setup Environment
+`asio` and `websocketpp` are git submodules, so clone recursively (or fetch them in an existing clone):
+```powershell
+git clone --recursive git@github.com:Rishav123raj/BlockSprint.git
+# in an existing clone:
+git submodule update --init
+```
+
 No Binance API key is needed: the connector only uses public market-data endpoints.
 
 Install the Python requirements:

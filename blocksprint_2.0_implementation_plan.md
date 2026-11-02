@@ -19,6 +19,9 @@
 | 2026-11-02 | P1.7 + P1.8 done | `IClock` / `WallClock` / `SimClock`; `MatchingEngineManager` → **`MatchingEngine`** (still in `matching_engine.hpp`): instantiable, injected clock, per-engine trade IDs from 1, optional locking. API server receives the engine. Two `SimClock` runs are bit-identical including trade IDs and timestamps (part of P1.17). 48 tests / 280 assertions on MSVC + GCC; live Binance mirror verified |
 | 2026-11-02 | P2.0–P2.5 done, P2.6 documented | Recorder, raw archive I/O, inspector, 12 pytest tests. Live runs: zero sequence/trade gaps, all snapshots syncable, seamless 3-connection rollover. Found and fixed a shutdown-order bug. **Latency finding:** 1–2.5 s receive bursts from this PC come from the network path (a bare probe sees the same), which supports the Tokyo VPS recommendation. See [docs/recorder_ops.md](docs/recorder_ops.md) |
 
+| 2026-11-02 | Committed and pushed | 4 commits on `v2`; pushed `v2`, `release/v1` and tag `v1.0.0` (history kept as is, by decision). `main` untouched |
+| 2026-11-02 | **D22** found by the first CI run | `asio`/`websocketpp` were submodule pointers without `.gitmodules`, so no clone (1.0 included) could build the server. Registered as submodules pinned to the same release tags; CI checks out submodules |
+
 ---
 
 ## Table of Contents

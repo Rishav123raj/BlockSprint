@@ -186,6 +186,7 @@ Each item is marked with how much it matters for the simulator: 🔴 blocker, �
 | D18 | 🟡 | `GET /api/bbo?symbol=anything` creates a book | `get_or_create_book` in getters | Arbitrary queries make the books map grow without limit. |
 | D19 | 🟡 | Logger: hard-coded path, no levels, flushes every line | [logger.hpp:59-60](src/logger.hpp#L59-L60) | Backtests need a log per run and a level threshold, and must not flush on hot paths. |
 | D21 | 🟠 | FOK can partially fill and **rest** (found on 2026-11-01 by the P1.3 golden workload) | `match_fok_order` → `match_limit_order` | The dry run counts liquidity on deeper levels past self-trade makers, but the sweep stops at the level holding them. The FOK fills partially, and the remainder rests as a limit order, crossing the book. |
+| D22 | 🔴 | **The repo can't build from a fresh clone** (found on 2026-11-02 by the first CI run; fixed on `v2`) | `external/asio`, `external/websocketpp` | Both are committed as submodule pointers (mode 160000) with no `.gitmodules`, so clones get empty folders and the server fails to build. Fixed by registering them as submodules pinned to the same release commits (asio-1-30-2, websocketpp 0.8.2). |
 | D20 | 🟡 | Doc drift: README says Python 3.12 (project uses 3.13); test names wrong; `binance_integration_guide.md` uses `python-binance`/pandas, which aren't dependencies | docs | Confusing for anyone reading the repo. |
 
 ---
