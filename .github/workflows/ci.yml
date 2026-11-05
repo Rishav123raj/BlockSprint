@@ -38,6 +38,22 @@ jobs:
       - name: Unit tests
         run: ${{ matrix.test }}
 
+  fuzz:
+    # P1.16: 20 seeds x 50,000 = 10^6 random operations against the reference book (~30 s). Runs on every
+    # push; PR builds already run 10^5 inside the unit tests
+    name: Fuzz / 10^6 ops (GCC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unit tests
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ -DBLOCKSPRINT_BUILD_SERVER=OFF -DBLOCKSPRINT_BUILD_BENCH=OFF
+          cmake --build build -j 4 --target unit_tests
+      - name: Fuzz
+        env:
+          BLOCKSPRINT_FUZZ_OPS: "50000"
+        run: ./build/unit_tests -ts=fuzz
+
   python-tests:
     name: Python / pytest
     runs-on: ubuntu-latest
