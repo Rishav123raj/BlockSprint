@@ -36,14 +36,30 @@ struct WorkloadStats {
     size_t modifies_ok = 0;
 };
 
-// Seeded random mix of every order type, cancels and modifies, including BINANCE_-prefixed (STP) orders.
+// Golden values for seed kGoldenSeed, 5,000 operations.
+// - stp_percent = 0: no self-trade prevention involved, so 1.0 and 2.0 must agree. Pinned on the pre-P1.9
+//   engine, whose results matched the original v1.0.0 sources on the full characterization suite.
+// - stp_percent = 15: includes mirrored-liquidity orders. Pinned at P1.9, which changed self-trade
+//   semantics on purpose (D7, D21). The 1.0 value was 11732550826495055626.
+constexpr uint64_t kGoldenSeed = 20261101ULL;
+constexpr uint64_t kGoldenHashNoStp = 6980882564197707180ULL;
+constexpr uint64_t kGoldenHashStp = 937915414169173351ULL;
+
+// Seeded random mix of every order type, cancels and modifies, including mirrored-liquidity orders
+// (owner "MARKET", StpPolicy::SKIP, IDs prefixed BINANCE_ as the 1.0 connector named them).
 // Prices are multiples of 0.5 and quantities multiples of 0.25: exact in binary floating point, so the hash
 // is identical whether the engine stores doubles (1.0) or fixed-point integers (2.0).
 // after_op (optional) runs after every operation, e.g. to check book invariants.
-// stp_percent is the share of orders with a BINANCE_ id, i.e. subject to 1.0 self-trade prevention.
+// stp_percent is the share of mirrored-liquidity orders, which never trade with each other.
+// mixed_owners gives every other order one of three owners and a random STP policy, so all policies
+// are exercised. Off by default: it draws extra random numbers, which would change the golden hashes.
+// post_only_and_amend turns a quarter of the limit orders into post-only (LIMIT_MAKER) orders and half of
+// the modifications into Binance-style amends (new total quantity, sometimes keeping the price). Also
+// off by default for the same reason.
 inline WorkloadStats run_random_workload(MatchingEngine& eng, const std::string& symbol, uint64_t seed,
                                          int ops, const std::function<void(int op)>& after_op = {},
-                                         uint32_t stp_percent = 15) {
+                                         uint32_t stp_percent = 15, bool mixed_owners = false,
+                                         bool post_only_and_amend = false) {
     Lcg rng{seed};
     WorkloadStats stats;
     std::vector<std::string> ids;
@@ -70,15 +86,27 @@ inline WorkloadStats run_random_workload(MatchingEngine& eng, const std::string&
                              : action < 65 ? OrderType::IOC
                                            : OrderType::FOK;
             Side side = (rng.next() % 2) ? Side::BUY : Side::SELL;
-            std::string id = ((rng.next() % 100) < stp_percent ? "BINANCE_" : "O") + std::to_string(i);
+            bool mirrored = (rng.next() % 100) < stp_percent;
+            std::string id = (mirrored ? "BINANCE_" : "O") + std::to_string(i);
             double px = price();
             double q = qty();
+            if (post_only_and_amend && type == OrderType::LIMIT && rng.next() % 4 == 0) {
+                type = OrderType::LIMIT_MAKER;
+            }
             if (type == OrderType::MARKET) {
                 px = 0.0;
             }
             ids.push_back(id);
             stats.hash = fnv1a(stats.hash, "S" + id);
-            record(eng.submit_order(make_order(id, symbol, type, side, px, q)));
+            auto order = make_order(id, symbol, type, side, px, q);
+            if (mirrored) {
+                order->owner_id = "MARKET";
+                order->stp_policy = StpPolicy::SKIP;
+            } else if (mixed_owners) {
+                order->owner_id = "P" + std::to_string(rng.next() % 3);
+                order->stp_policy = static_cast<StpPolicy>(rng.next() % 5);
+            }
+            record(eng.submit_order(order));
         } else if (!ids.empty() && action < 90) {
             const std::string& id = recent_id();
             bool ok = eng.cancel_order(symbol, id);
@@ -89,7 +117,16 @@ inline WorkloadStats run_random_workload(MatchingEngine& eng, const std::string&
             double q = qty();
             double px = price();
             std::vector<Trade> trades;
-            bool ok = eng.modify_order(symbol, id, fx(q), fx(px), trades);
+            bool ok;
+            if (post_only_and_amend && rng.next() % 2 == 0) {
+                std::optional<Price> new_price;
+                if (rng.next() % 3 != 0) {
+                    new_price = fx(px);
+                }
+                ok = eng.amend_order(symbol, id, fx(q), new_price, trades);
+            } else {
+                ok = eng.modify_order(symbol, id, fx(q), fx(px), trades);
+            }
             stats.modifies_ok += ok;
             stats.hash = fnv1a(stats.hash, "M" + id + (ok ? "1" : "0"));
             record(trades);

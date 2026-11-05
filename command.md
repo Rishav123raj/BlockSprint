@@ -92,8 +92,8 @@ curl "http://127.0.0.1:8080/api/depth?symbol=BTC-USDT"
 *Expected Result*: Returns lists of top 10 bids/asks and their quantities currently resting in the C++ memory book.
 
 ### 3. Verify Log File Updates
-Verify that logs are correctly routed to the log folder and timestamps are converted to your system local time (IST):
-- Check [`logs/matching_engine.log`](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/logs/matching_engine.log) for trade matches and synchronization updates.
+Each server run writes its own log, `logs/matching_engine-YYYYMMDD-HHMMSS.log`, with UTC timestamps (2.0; 1.0 used one `logs/matching_engine.log` in local time):
+- Open the newest `logs/matching_engine-*.log` for startup, shutdown and reset messages. Start the server with `--log-level debug` to also log WebSocket connections.
 
 ---
 

@@ -1,80 +1,80 @@
 # File: src/core/matching_engine.hpp & src/core/matching_engine.cpp
 
-This component manages multiple `OrderBook` instances (one per symbol), routes incoming orders to their correct books, ensures thread safety, and dispatches events (BBO, L2 depth, and trades) to register callbacks.
+`MatchingEngine` manages one `OrderBook` per symbol, routes orders to them, and publishes what happened: execution reports, trades, BBO changes and depth. Up to 1.0 it was the singleton `MatchingEngineManager`; since 2.0 (P1.8) it's a normal class, so several engines can run side by side (one per backtest in a parameter sweep, or one per test case).
 
 ---
 
 ## What it Does
 
-1. **Order Book Registry**: Holds a registry of symbol order books:
-   `std::unordered_map<std::string, std::unique_ptr<OrderBook>> books_;`
-2. **Dynamic Creation**: Creates books dynamically on the first submission of an order for a new symbol (e.g. `BTC-USDT`, `ETH-USDT`).
-3. **Thread Safety**: Uses a `std::recursive_mutex` to protect the registry and matching operations. It ensures that only one thread can modify a symbol's order book at any given time, preventing race conditions.
-4. **Publish-Subscribe Mechanism**: Exposes callback registrations:
-   - `register_bbo_callback`: Triggered when the BBO (Best Bid & Offer) changes.
-   - `register_depth_callback`: Triggered when order book depth changes.
-   - `register_trade_callback`: Triggered when a trade execution fill occurs.
-5. **API Routing**: Translates user-facing inputs into actions against target order books:
-   - `submit_order`: Matches, inserts rest, and triggers callbacks.
-   - `cancel_order`: Cancels and updates BBO/depth feeds.
-   - `modify_order`: Modifies and routes trades/updates.
+1. **Order book registry:** `std::unordered_map<std::string, std::unique_ptr<OrderBook>> books_`. A book is created on the first order for a new symbol.
+2. **Injected clock (P1.7):** `MatchingEngine(std::shared_ptr<const IClock> clock, EngineOptions options)`. The live server uses `WallClock`; a backtest drives a `SimClock` from historical timestamps, so results don't depend on when or how fast a replay runs.
+3. **Per-engine sequences:** trade IDs and execution report `seq` numbers start at 1 for every engine and are shared by its books, so two runs over the same input produce identical IDs.
+4. **Optional locking:** `EngineOptions::thread_safe` (default `true`) guards every call with one `std::recursive_mutex`. A single-threaded simulation turns it off.
+5. **Order operations:** `submit_order`, `replace_order`, `cancel_order` and `modify_order`. Each takes an optional `std::vector<ExecReport>* reports` that receives the execution reports it produced (P1.10, see [events.md](events.md)).
+6. **Market data:** `bbo(symbol)` and `depth(symbol, levels)` return plain structs (`Bbo`, `Depth` in `market_data.hpp`). `get_bbo` and `get_l2_depth` return the same data in the 1.0 JSON format for the API, tools and tests.
+
+## Callbacks
+
+Registered once, called synchronously inside the engine call, in this order:
+
+| Callback | Receives | When |
+| :--- | :--- | :--- |
+| `register_exec_report_callback` | `const ExecReport&` | Every report, in `seq` order |
+| `register_trade_callback` | `symbol, const Trade&` | Every trade |
+| `register_bbo_callback` | `symbol, const Bbo&` | After a submit/replace that changed the BBO; after every successful cancel or modify |
+| `register_depth_callback` | `symbol, const Depth&` (top 10) | After a LIMIT submit, a trade or a BBO change; after every successful cancel or modify |
+
+## Hot path (P1.11)
+
+The engine works only with integers and plain structs. BBO changes are detected by comparing four integers (`Bbo::same_quotes`). JSON is produced only at the boundary: the API server converts the structs when a subscriber is connected, and coalesces depth to at most one update per symbol every 100 ms. Up to P1.10, every order built the BBO as JSON twice and compared it as strings, which made the engine 15–85× slower (see [docs/baseline/bench_core.md](../docs/baseline/bench_core.md)).
 
 ---
 
 ## Architectural Diagram
 
-The diagram below shows the flow of an order through the `MatchingEngineManager` and how callbacks are invoked:
-
 ```mermaid
 graph TD
-    subgraph Clients
-        REST[REST Thread]
-        WS[WS Thread]
+    subgraph Callers
+        API[ApiServer: REST / WS orders]
+        SIM[Backtest / tests]
     end
 
-    subgraph MatchingEngineManager ["MatchingEngineManager (Thread-Safe Registry)"]
-        M[MatchingEngineManager::getInstance]
-        MUTEX[std::recursive_mutex mutex_]
-        MAP["books_ : Symbol -> OrderBook"]
+    subgraph Engine ["MatchingEngine (one instance per server or backtest)"]
+        LOCK["lock() when thread_safe"]
+        MAP["books_ : symbol -> OrderBook"]
+        CLOCK[IClock: WallClock or SimClock]
+        SEQ["trade_id_seq_, report_seq_"]
     end
 
-    subgraph OrderBooks
+    subgraph Books
         OB_BTC[OrderBook BTC-USDT]
         OB_ETH[OrderBook ETH-USDT]
     end
 
-    subgraph Event Publisher callbacks
-        BBO_CB[BboCallback]
-        DEP_CB[DepthCallback]
-        TRD_CB[TradeCallback]
+    subgraph Callbacks
+        ER[ExecReportCallback]
+        TR[TradeCallback]
+        BBO[BboCallback]
+        DEP[DepthCallback]
     end
 
-    REST -->|submit_order| M
-    WS -->|cancel_order| M
+    API -->|submit / replace / cancel / modify| LOCK
+    SIM -->|same calls, thread_safe = false| LOCK
+    LOCK --> MAP
+    MAP --> OB_BTC
+    MAP --> OB_ETH
+    CLOCK -. timestamps .-> OB_BTC
+    SEQ -. IDs .-> OB_BTC
 
-    M -->|std::lock_guard| MUTEX
-    MUTEX -->|Locates/Creates Book| MAP
-    
-    MAP -->|Route to BTC| OB_BTC
-    MAP -->|Route to ETH| OB_ETH
-    
-    OB_BTC -->|1. Returns Trades| MAP
-    OB_BTC -->|2. Check BBO Change| MAP
-    
-    MAP -->|Triggers Fills| TRD_CB
-    MAP -->|Triggers BBO update| BBO_CB
-    MAP -->|Triggers L2 Depth| DEP_CB
-
-    BBO_CB -->|Broadcast to WS clients| WEB_WS[ApiServer WebSocket Threads]
-    DEP_CB -->|Broadcast to WS clients| WEB_WS
-    TRD_CB -->|Broadcast to WS clients| WEB_WS
+    OB_BTC -->|reports, trades| ER
+    ER --> TR
+    TR --> BBO
+    BBO --> DEP
+    DEP -->|coalesced 100 ms| WS[ApiServer WebSocket feeds]
 ```
+
 ---
 
-## Concurrency Analysis
+## Concurrency
 
-Since our network layer (WebSocket++ / Asio) utilizes multiple socket threads to process I/O and submit orders concurrently:
-1. When Thread A submits a buy order for `BTC-USDT`, it locks the `recursive_mutex` in `MatchingEngineManager`.
-2. Thread B (submitting an order for `ETH-USDT`) is blocked until Thread A finishes matching and exits the critical section.
-3. This single-mutex approach guarantees sequential consistency, which is crucial for financial matches where matching timestamps and sequence numbers must be strictly consistent.
-4. Despite the lock overhead, the engine core runs in microseconds, allowing it to easily surpass the required throughput of `> 1000 orders/sec` (benchmark showed `~ 2400 orders/sec` end-to-end).
+With `thread_safe = true`, one mutex serializes every call across all symbols. That keeps trade IDs, report sequence numbers and timestamps strictly consistent, which matters more here than parallelism between symbols. The engine itself handles hundreds of thousands of operations per second (`bench_core`), so the lock isn't the bottleneck for the live server, where network and JSON handling dominate. The mutex is recursive, so a callback may call back into the engine.

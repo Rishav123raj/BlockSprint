@@ -1,62 +1,161 @@
 #include "order_book.hpp"
 #include <algorithm>
 
-OrderBook::OrderBook(std::string symbol, const IClock& clock, uint64_t& trade_id_seq)
-    : symbol_(std::move(symbol)), clock_(clock), trade_id_seq_(trade_id_seq) {}
+OrderBook::OrderBook(std::string symbol, const IClock& clock, uint64_t& trade_id_seq, uint64_t& report_seq,
+                     const FeeBook& fees)
+    : symbol_(std::move(symbol)), clock_(clock), trade_id_seq_(trade_id_seq), report_seq_(report_seq), fees_(fees) {}
 
-std::vector<Trade> OrderBook::submit_order(std::shared_ptr<Order> order) {
-    if (orders_lookup_.find(order->order_id) != orders_lookup_.end()) {
-        cancel_order(order->order_id);
-    }
+ExecReport& OrderBook::report(std::vector<ExecReport>& reports, ExecType type, const Order& order, ExecReason reason) {
+    ExecReport r;
+    r.seq = ++report_seq_;
+    r.timestamp = clock_.now_ns();
+    r.type = type;
+    r.reason = reason;
+    r.order_id = order.order_id;
+    r.owner_id = order.owner_id;
+    r.symbol = order.symbol;
+    r.side = order.side;
+    r.order_type = order.order_type;
+    r.price = order.price;
+    r.quantity = order.quantity;
+    r.cum_qty = order.filled_quantity;
+    r.leaves_qty = (type == ExecType::CANCELLED || type == ExecType::REJECTED) ? 0 : order.remaining_quantity;
+    r.cum_fee = order.fees_paid;
+    reports.push_back(std::move(r));
+    return reports.back();
+}
 
-    order->remaining_quantity = order->quantity;
+std::vector<Trade> OrderBook::submit_order(std::shared_ptr<Order> order, std::vector<ExecReport>& reports) {
+    order->filled_quantity = 0;
+    order->fees_paid = 0;
+    return submit_internal(order, reports, ExecType::ACK);
+}
+
+std::vector<Trade> OrderBook::submit_internal(std::shared_ptr<Order> order, std::vector<ExecReport>& reports,
+                                              ExecType first_report) {
+    order->remaining_quantity = order->quantity - order->filled_quantity;
     order->is_cancelled = false;
     order->has_iterator = false;
 
+    if (orders_lookup_.find(order->order_id) != orders_lookup_.end()) {
+        report(reports, ExecType::REJECTED, *order, ExecReason::DUPLICATE_ORDER_ID).text =
+            "Duplicate order_id '" + order->order_id + "': an order with this ID is resting (use replace)";
+        return {};
+    }
+    // New orders are validated here; a modify validates its new price and quantity before re-submitting
+    if (first_report == ExecType::ACK) {
+        if (auto error = validate_order(*order, spec())) {
+            report(reports, ExecType::REJECTED, *order, error->reason).text = error->text;
+            return {};
+        }
+        if (order->order_type == OrderType::LIMIT_MAKER && would_cross(*order)) {
+            report(reports, ExecType::REJECTED, *order, ExecReason::POST_ONLY_WOULD_TAKE).text =
+                post_only_text(*order);
+            return {};
+        }
+    }
+    report(reports, first_report, *order);
+
     std::vector<Trade> trades;
+    bool taker_cancelled = false;
+    ExecReason unfilled = ExecReason::NONE;  // why an unfilled remainder is cancelled, if it is
 
     switch (order->order_type) {
         case OrderType::LIMIT:
-            trades = match_against_book(order, true);
-            if (order->remaining_quantity > 0) {
-                add_resting_order(order);
-            }
-            break;
-        case OrderType::MARKET:
-            trades = match_against_book(order, false);
-            break;
-        case OrderType::IOC:
-            trades = match_against_book(order, true);
-            break;
-        case OrderType::FOK:
-            // Only execute once the dry run confirms a complete fill. As in 1.0, a remainder can still
-            // rest when self-trade makers stop the sweep early (v1-quirk "D21"); fixed with STP rework in P1.9.
-            if (can_fok_be_fully_filled(order)) {
-                trades = match_against_book(order, true);
-                if (order->remaining_quantity > 0) {
+            trades = match_against_book(order, true, taker_cancelled, reports);
+            if (order->remaining_quantity > 0 && !taker_cancelled) {
+                // A remainder that still crosses the book only arises when self-trade prevention skipped
+                // resting orders; resting it would cross the book (1.0 defect D7), so it is cancelled instead
+                if (would_cross(*order)) {
+                    unfilled = ExecReason::WOULD_CROSS;
+                } else {
                     add_resting_order(order);
                 }
             }
             break;
+        case OrderType::MARKET:
+            trades = match_against_book(order, false, taker_cancelled, reports);
+            unfilled = ExecReason::NO_LIQUIDITY;
+            break;
+        case OrderType::IOC:
+            trades = match_against_book(order, true, taker_cancelled, reports);
+            unfilled = ExecReason::IOC_REMAINDER;
+            break;
+        case OrderType::LIMIT_MAKER:
+            // Checked above (new orders) or in modify (amends): it does not cross, so it only rests
+            if (would_cross(*order)) {
+                unfilled = ExecReason::WOULD_CROSS;
+            } else {
+                add_resting_order(order);
+            }
+            break;
+        case OrderType::FOK:
+            // All or nothing. The dry run applies the same self-trade rules as the sweep, so a confirmed
+            // FOK fills completely; it never rests (1.0 defect D21)
+            if (can_fok_be_fully_filled(order)) {
+                trades = match_against_book(order, true, taker_cancelled, reports);
+            }
+            unfilled = ExecReason::FOK_KILL;
+            break;
     }
 
+    if (order->remaining_quantity > 0 && (taker_cancelled || unfilled != ExecReason::NONE)) {
+        report(reports, ExecType::CANCELLED, *order, taker_cancelled ? ExecReason::STP_TAKER : unfilled);
+    }
     return trades;
 }
 
-bool OrderBook::cancel_order(const std::string& order_id) {
+bool OrderBook::amend_order(const std::string& order_id, Quantity new_total, std::optional<Price> new_price,
+                            std::vector<Trade>& generated_trades, std::vector<ExecReport>& reports) {
     auto it = orders_lookup_.find(order_id);
     if (it == orders_lookup_.end()) {
         return false;
+    }
+    const auto& order = it->second;
+    Quantity new_open = new_total - order->filled_quantity;
+    if (new_open <= 0) {
+        // Nothing left to trade: amending to (or below) the filled quantity cancels the rest
+        return cancel_order(order_id, reports);
+    }
+    return modify_order(order_id, new_open, new_price.value_or(order->price), generated_trades, reports);
+}
+
+std::string OrderBook::post_only_text(const Order& order) const {
+    return "Post-only order '" + order.order_id + "' at " + format_fixed(order.price) +
+           " would trade immediately against the best " + (order.side == Side::BUY ? "ask" : "bid");
+}
+
+std::vector<Trade> OrderBook::replace_order(std::shared_ptr<Order> order, std::vector<ExecReport>& reports) {
+    if (auto old = erase_order(order->order_id)) {
+        report(reports, ExecType::CANCELLED, *old, ExecReason::REPLACED);
+    }
+    return submit_order(order, reports);
+}
+
+std::shared_ptr<Order> OrderBook::erase_order(const std::string& order_id) {
+    auto it = orders_lookup_.find(order_id);
+    if (it == orders_lookup_.end()) {
+        return nullptr;
     }
 
     auto order = it->second;
     order->is_cancelled = true;
     remove_order_from_book(order);
     orders_lookup_.erase(it);
+    return order;
+}
+
+bool OrderBook::cancel_order(const std::string& order_id, std::vector<ExecReport>& reports) {
+    auto order = erase_order(order_id);
+    if (!order) {
+        return false;
+    }
+    report(reports, ExecType::CANCELLED, *order, ExecReason::USER);
     return true;
 }
 
-bool OrderBook::modify_order(const std::string& order_id, Quantity new_qty, Price new_price, std::vector<Trade>& generated_trades) {
+bool OrderBook::modify_order(const std::string& order_id, Quantity new_qty, Price new_price,
+                             std::vector<Trade>& generated_trades, std::vector<ExecReport>& reports) {
     auto it = orders_lookup_.find(order_id);
     if (it == orders_lookup_.end()) {
         return false;
@@ -64,12 +163,35 @@ bool OrderBook::modify_order(const std::string& order_id, Quantity new_qty, Pric
 
     auto order = it->second;
 
-    // Standard exchange rules:
+    // Modifying to zero quantity cancels the order
+    if (new_qty <= 0) {
+        return cancel_order(order_id, reports);
+    }
+
+    // The new price and open quantity must follow the same rules as a new order
+    Order proposed = *order;
+    proposed.price = new_price;
+    proposed.quantity = new_qty;
+    if (auto error = validate_order(proposed, spec())) {
+        proposed.quantity = order->filled_quantity + new_qty;
+        proposed.remaining_quantity = new_qty;
+        report(reports, ExecType::REJECTED, proposed, error->reason).text = error->text;
+        return false;
+    }
+    if (order->order_type == OrderType::LIMIT_MAKER && would_cross(proposed)) {
+        proposed.quantity = order->filled_quantity + new_qty;
+        proposed.remaining_quantity = new_qty;
+        report(reports, ExecType::REJECTED, proposed, ExecReason::POST_ONLY_WOULD_TAKE).text = post_only_text(proposed);
+        return false;
+    }
+
+    // Standard exchange rules (new_qty is the new open quantity):
     // 1. If price is unchanged and new qty is less than current remaining quantity, we keep priority.
     if (order->price == new_price && new_qty < order->remaining_quantity) {
         Quantity diff = order->remaining_quantity - new_qty;
         order->remaining_quantity = new_qty;
-        
+        order->quantity = order->filled_quantity + new_qty;
+
         if (order->side == Side::BUY) {
             auto price_it = bids_.find(order->price);
             if (price_it != bids_.end()) {
@@ -81,86 +203,61 @@ bool OrderBook::modify_order(const std::string& order_id, Quantity new_qty, Pric
                 price_it->second.total_quantity -= diff;
             }
         }
-
-        if (new_qty == 0) {
-            cancel_order(order_id);
-        }
+        report(reports, ExecType::AMENDED, *order);
         return true;
     }
 
-    // 2. Otherwise (price change or qty increase), order is cancelled and a new one is submitted.
-    // Retain original order details
-    std::string symbol = order->symbol;
-    Side side = order->side;
-    OrderType type = order->order_type;
+    // 2. Otherwise (price change or qty increase), the order is re-submitted and loses priority.
+    // It keeps its identity, owner, policy and fills, so the client sees one AMENDED order.
+    erase_order(order_id);
 
-    // Cancel old order
-    cancel_order(order_id);
-
-    // Resubmit new order
     auto new_order = std::make_shared<Order>();
     new_order->order_id = order_id;
-    new_order->symbol = symbol;
-    new_order->order_type = type;
-    new_order->side = side;
+    new_order->symbol = order->symbol;
+    new_order->order_type = order->order_type;
+    new_order->side = order->side;
     new_order->price = new_price;
-    new_order->quantity = new_qty;
+    new_order->filled_quantity = order->filled_quantity;
+    new_order->fees_paid = order->fees_paid;
+    new_order->quantity = order->filled_quantity + new_qty;
     new_order->timestamp = clock_.now_ns();
+    new_order->owner_id = order->owner_id;
+    new_order->stp_policy = order->stp_policy;
+    new_order->market_data_liquidity = order->market_data_liquidity;
 
-    generated_trades = submit_order(new_order);
+    generated_trades = submit_internal(new_order, reports, ExecType::AMENDED);
     return true;
 }
 
-nlohmann::json OrderBook::get_bbo() const {
-    nlohmann::json j;
-    j["symbol"] = symbol_;
-    j["timestamp"] = formatIsoTimestamp(clock_.now_ns());
-
+Bbo OrderBook::bbo() const {
+    Bbo b;
+    b.timestamp = clock_.now_ns();
     if (!bids_.empty()) {
-        auto best_bid = bids_.begin();
-        j["bid_price"] = format_legacy(best_bid->first);
-        j["bid_qty"] = format_legacy(best_bid->second.total_quantity);
-    } else {
-        j["bid_price"] = "0.0";
-        j["bid_qty"] = "0.0";
+        b.bid_price = bids_.begin()->first;
+        b.bid_qty = bids_.begin()->second.total_quantity;
     }
-
     if (!asks_.empty()) {
-        auto best_ask = asks_.begin();
-        j["ask_price"] = format_legacy(best_ask->first);
-        j["ask_qty"] = format_legacy(best_ask->second.total_quantity);
-    } else {
-        j["ask_price"] = "0.0";
-        j["ask_qty"] = "0.0";
+        b.ask_price = asks_.begin()->first;
+        b.ask_qty = asks_.begin()->second.total_quantity;
     }
-
-    return j;
+    return b;
 }
 
-nlohmann::json OrderBook::get_l2_depth(int depth) const {
-    nlohmann::json j;
-    j["symbol"] = symbol_;
-    j["timestamp"] = formatIsoTimestamp(clock_.now_ns());
-
-    auto bids_arr = nlohmann::json::array();
-    int b_count = 0;
-    for (const auto& [price, level] : bids_) {
-        if (b_count >= depth) break;
-        bids_arr.push_back({format_legacy(price), format_legacy(level.total_quantity)});
-        b_count++;
-    }
-    j["bids"] = bids_arr;
-
-    auto asks_arr = nlohmann::json::array();
-    int a_count = 0;
-    for (const auto& [price, level] : asks_) {
-        if (a_count >= depth) break;
-        asks_arr.push_back({format_legacy(price), format_legacy(level.total_quantity)});
-        a_count++;
-    }
-    j["asks"] = asks_arr;
-
-    return j;
+Depth OrderBook::depth(int levels) const {
+    Depth d;
+    d.timestamp = clock_.now_ns();
+    auto copy_side = [levels](const auto& book_side, std::vector<DepthLevel>& out) {
+        out.reserve(static_cast<size_t>(std::max(0, std::min<int>(levels, static_cast<int>(book_side.size())))));
+        for (const auto& [price, level] : book_side) {
+            if (static_cast<int>(out.size()) >= levels) {
+                break;
+            }
+            out.push_back(DepthLevel{price, level.total_quantity});
+        }
+    };
+    copy_side(bids_, d.bids);
+    copy_side(asks_, d.asks);
+    return d;
 }
 
 namespace {
@@ -170,18 +267,18 @@ bool crosses(const Order& order, Price level_price) {
     return order.side == Side::BUY ? order.price >= level_price : order.price <= level_price;
 }
 
-// Self-trade prevention: mirrored Binance liquidity never matches other mirrored Binance liquidity.
+// Both orders belong to the same participant and the incoming order's policy restricts self-trades
 bool is_self_trade(const Order& taker, const Order& maker) {
-    return taker.order_id.rfind("BINANCE_", 0) == 0 && maker.order_id.rfind("BINANCE_", 0) == 0;
+    return taker.stp_policy != StpPolicy::NONE && !taker.owner_id.empty() && taker.owner_id == maker.owner_id;
 }
 
 } // namespace
 
 template <typename BookSide>
 void OrderBook::sweep(BookSide& book_side, const std::shared_ptr<Order>& order, bool enforce_limit,
-                      std::vector<Trade>& trades) {
-    while (!book_side.empty() && order->remaining_quantity > 0) {
-        auto level_it = book_side.begin();
+                      std::vector<Trade>& trades, bool& taker_cancelled, std::vector<ExecReport>& reports) {
+    auto level_it = book_side.begin();
+    while (level_it != book_side.end() && order->remaining_quantity > 0 && !taker_cancelled) {
         if (enforce_limit && !crosses(*order, level_it->first)) {
             break;
         }
@@ -191,7 +288,24 @@ void OrderBook::sweep(BookSide& book_side, const std::shared_ptr<Order>& order, 
         while (order_it != level.orders.end() && order->remaining_quantity > 0) {
             auto maker_order = *order_it;
             if (is_self_trade(*order, *maker_order)) {
-                ++order_it;
+                StpPolicy policy = order->stp_policy;
+                if (policy == StpPolicy::SKIP) {
+                    ++order_it;
+                    continue;
+                }
+                if (policy == StpPolicy::CANCEL_MAKER || policy == StpPolicy::CANCEL_BOTH) {
+                    // Remove the own resting order in place (the level itself is handled below)
+                    level.total_quantity -= maker_order->remaining_quantity;
+                    maker_order->is_cancelled = true;
+                    maker_order->has_iterator = false;
+                    orders_lookup_.erase(maker_order->order_id);
+                    order_it = level.orders.erase(order_it);
+                    report(reports, ExecType::CANCELLED, *maker_order, ExecReason::STP_MAKER);
+                }
+                if (policy == StpPolicy::CANCEL_TAKER || policy == StpPolicy::CANCEL_BOTH) {
+                    taker_cancelled = true;
+                    break;
+                }
                 continue;
             }
 
@@ -210,8 +324,28 @@ void OrderBook::sweep(BookSide& book_side, const std::shared_ptr<Order>& order, 
             });
 
             maker_order->remaining_quantity -= match_qty;
+            maker_order->filled_quantity += match_qty;
             order->remaining_quantity -= match_qty;
+            order->filled_quantity += match_qty;
             level.total_quantity -= match_qty;
+
+            for (const auto& [filled, liquidity] : {std::make_pair(order, Liquidity::TAKER),
+                                                    std::make_pair(maker_order, Liquidity::MAKER)}) {
+                // Market-data liquidity is not a participant and pays nothing
+                int64_t fee = 0;
+                if (!filled->market_data_liquidity) {
+                    const FeeSchedule& schedule = fees_.schedule_for(filled->owner_id);
+                    fee = fee_for(maker_order->price, match_qty,
+                                  liquidity == Liquidity::TAKER ? schedule.taker_rate : schedule.maker_rate);
+                }
+                filled->fees_paid += fee;
+                ExecReport& fill = report(reports, ExecType::FILL, *filled);
+                fill.fee = fee;
+                fill.last_px = maker_order->price;
+                fill.last_qty = match_qty;
+                fill.liquidity = liquidity;
+                fill.trade_id = trades.back().trade_id;
+            }
 
             if (maker_order->remaining_quantity <= 0) {
                 orders_lookup_.erase(maker_order->order_id);
@@ -221,28 +355,38 @@ void OrderBook::sweep(BookSide& book_side, const std::shared_ptr<Order>& order, 
             }
         }
 
-        // A level that still has orders either filled the taker or holds only self-trade makers;
-        // in both cases stop here (1.0 behavior, see the D7 characterization test).
+        // A level that still holds orders here either filled the taker or holds only skipped own
+        // orders; in the second case matching continues at the next level
         if (level.orders.empty()) {
-            book_side.erase(level_it);
+            level_it = book_side.erase(level_it);
         } else {
-            break;
+            ++level_it;
         }
     }
 }
 
-std::vector<Trade> OrderBook::match_against_book(std::shared_ptr<Order> order, bool enforce_limit) {
+std::vector<Trade> OrderBook::match_against_book(std::shared_ptr<Order> order, bool enforce_limit,
+                                                 bool& taker_cancelled, std::vector<ExecReport>& reports) {
     std::vector<Trade> trades;
     if (order->side == Side::BUY) {
-        sweep(asks_, order, enforce_limit, trades);
+        sweep(asks_, order, enforce_limit, trades, taker_cancelled, reports);
     } else {
-        sweep(bids_, order, enforce_limit, trades);
+        sweep(bids_, order, enforce_limit, trades, taker_cancelled, reports);
     }
     return trades;
 }
 
+bool OrderBook::would_cross(const Order& order) const {
+    if (order.side == Side::BUY) {
+        return !asks_.empty() && crosses(order, asks_.begin()->first);
+    }
+    return !bids_.empty() && crosses(order, bids_.begin()->first);
+}
+
 template <typename BookSide>
 bool OrderBook::has_fillable_liquidity(const BookSide& book_side, const Order& order) const {
+    // Mirrors sweep(): skipped and cancelled own orders provide no liquidity, and a policy that cancels
+    // the taker ends the search at the first own order
     Quantity accumulated_qty = 0;
     for (const auto& [price, level] : book_side) {
         if (!crosses(order, price)) {
@@ -250,10 +394,13 @@ bool OrderBook::has_fillable_liquidity(const BookSide& book_side, const Order& o
         }
         for (const auto& resting_order : level.orders) {
             if (is_self_trade(order, *resting_order)) {
+                if (order.stp_policy == StpPolicy::CANCEL_TAKER || order.stp_policy == StpPolicy::CANCEL_BOTH) {
+                    return false;
+                }
                 continue;
             }
             accumulated_qty += resting_order->remaining_quantity;
-            if (accumulated_qty >= order.quantity) {
+            if (accumulated_qty >= order.remaining_quantity) {
                 return true;
             }
         }
@@ -373,6 +520,10 @@ std::vector<std::string> OrderBook::check_invariants() const {
     check_side(bids_, Side::BUY, violations, resting_orders);
     check_side(asks_, Side::SELL, violations, resting_orders);
 
+    if (is_crossed()) {
+        violations.push_back("book is crossed: best bid " + format_fixed(bids_.begin()->first) + " >= best ask " +
+                             format_fixed(asks_.begin()->first));
+    }
     if (resting_orders != orders_lookup_.size()) {
         violations.push_back("order lookup holds " + std::to_string(orders_lookup_.size()) +
                              " orders but the queues hold " + std::to_string(resting_orders));

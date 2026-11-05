@@ -30,4 +30,13 @@ struct EngineFixture {
                               double price, double quantity) {
         return engine_.submit_order(make_order(id, symbol, type, side, price, quantity));
     }
+
+    // Submit on behalf of a participant with a self-trade prevention policy
+    std::vector<Trade> submit_as(const std::string& owner, StpPolicy policy, const std::string& id,
+                                 const std::string& symbol, OrderType type, Side side, double price, double quantity) {
+        auto order = make_order(id, symbol, type, side, price, quantity);
+        order->owner_id = owner;
+        order->stp_policy = policy;
+        return engine_.submit_order(order);
+    }
 };

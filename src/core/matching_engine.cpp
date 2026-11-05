@@ -19,7 +19,10 @@ std::unique_lock<std::recursive_mutex> MatchingEngine::lock() const {
 OrderBook& MatchingEngine::get_or_create_book(const std::string& symbol) {
     auto it = books_.find(symbol);
     if (it == books_.end()) {
-        auto book = std::make_unique<OrderBook>(symbol, *clock_, trade_id_seq_);
+        auto book = std::make_unique<OrderBook>(symbol, *clock_, trade_id_seq_, report_seq_, fees_);
+        if (auto spec = specs_.find(symbol); spec != specs_.end()) {
+            book->set_spec(spec->second);
+        }
         auto& ref = *book;
         books_[symbol] = std::move(book);
         return ref;
@@ -27,75 +30,151 @@ OrderBook& MatchingEngine::get_or_create_book(const std::string& symbol) {
     return *(it->second);
 }
 
-std::vector<Trade> MatchingEngine::submit_order(std::shared_ptr<Order> order) {
+OrderBook* MatchingEngine::find_book(const std::string& symbol) {
+    auto it = books_.find(symbol);
+    return it == books_.end() ? nullptr : it->second.get();
+}
+
+void MatchingEngine::set_symbol_spec(const SymbolSpec& spec) {
     auto guard = lock();
-    
+    specs_[spec.symbol] = spec;
+    if (OrderBook* book = find_book(spec.symbol)) {
+        book->set_spec(spec);
+    }
+}
+
+std::optional<SymbolSpec> MatchingEngine::symbol_spec(const std::string& symbol) {
+    auto guard = lock();
+    auto it = specs_.find(symbol);
+    return it == specs_.end() ? std::nullopt : std::optional<SymbolSpec>(it->second);
+}
+
+void MatchingEngine::set_default_fee_schedule(const FeeSchedule& schedule) {
+    auto guard = lock();
+    fees_.set_default(schedule);
+}
+
+void MatchingEngine::set_fee_schedule(const std::string& owner, const FeeSchedule& schedule) {
+    auto guard = lock();
+    fees_.set(owner, schedule);
+}
+
+FeeSchedule MatchingEngine::fee_schedule(const std::string& owner) {
+    auto guard = lock();
+    return fees_.schedule_for(owner);
+}
+
+bool MatchingEngine::has_own_fee_schedule(const std::string& owner) {
+    auto guard = lock();
+    return fees_.own_schedule(owner).has_value();
+}
+
+bool MatchingEngine::has_symbol(const std::string& symbol) {
+    auto guard = lock();
+    return find_book(symbol) != nullptr;
+}
+
+void MatchingEngine::deliver(std::vector<ExecReport>& produced, std::vector<ExecReport>* reports) {
+    if (exec_report_callback_) {
+        for (const auto& r : produced) {
+            exec_report_callback_(r);
+        }
+    }
+    if (reports) {
+        reports->insert(reports->end(), std::make_move_iterator(produced.begin()),
+                        std::make_move_iterator(produced.end()));
+    }
+}
+
+std::vector<Trade> MatchingEngine::submit_order(std::shared_ptr<Order> order, std::vector<ExecReport>* reports) {
+    auto guard = lock();
     auto& book = get_or_create_book(order->symbol);
-    
-    // Fetch BBO before execution
-    nlohmann::json old_bbo = book.get_bbo();
+    Bbo old_bbo = book.bbo();
+    std::vector<ExecReport> produced;
+    std::vector<Trade> trades = book.submit_order(order, produced);
+    deliver(produced, reports);
+    publish_after_execution(book, *order, old_bbo, trades);
+    return trades;
+}
 
-    // Execute matching
-    std::vector<Trade> trades = book.submit_order(order);
+std::vector<Trade> MatchingEngine::replace_order(std::shared_ptr<Order> order, std::vector<ExecReport>* reports) {
+    auto guard = lock();
+    auto& book = get_or_create_book(order->symbol);
+    Bbo old_bbo = book.bbo();
+    std::vector<ExecReport> produced;
+    std::vector<Trade> trades = book.replace_order(order, produced);
+    deliver(produced, reports);
+    publish_after_execution(book, *order, old_bbo, trades);
+    return trades;
+}
 
+void MatchingEngine::publish_after_execution(OrderBook& book, const Order& order, const Bbo& old_bbo,
+                                             const std::vector<Trade>& trades) {
     // Trigger trade callbacks
     if (trade_callback_) {
         for (const auto& trade : trades) {
-            trade_callback_(order->symbol, trade);
+            trade_callback_(order.symbol, trade);
         }
     }
 
     // Trigger BBO/depth updates
-    nlohmann::json new_bbo = book.get_bbo();
-    bool bbo_changed = (old_bbo["bid_price"] != new_bbo["bid_price"] ||
-                        old_bbo["bid_qty"] != new_bbo["bid_qty"] ||
-                        old_bbo["ask_price"] != new_bbo["ask_price"] ||
-                        old_bbo["ask_qty"] != new_bbo["ask_qty"]);
+    Bbo new_bbo = book.bbo();
+    bool bbo_changed = !old_bbo.same_quotes(new_bbo);
 
     if (bbo_changed) {
         if (bbo_callback_) {
-            bbo_callback_(order->symbol, new_bbo);
+            bbo_callback_(order.symbol, new_bbo);
         }
     }
 
     // Always trigger L2 depth update on order submission if BBO changed or trade occurred
-    if (bbo_changed || !trades.empty() || order->order_type == OrderType::LIMIT) {
+    if (bbo_changed || !trades.empty() || order.order_type == OrderType::LIMIT) {
         if (depth_callback_) {
-            depth_callback_(order->symbol, book.get_l2_depth(10));
+            depth_callback_(order.symbol, book.depth(10));
         }
     }
-
-    return trades;
 }
 
-bool MatchingEngine::cancel_order(const std::string& symbol, const std::string& order_id) {
+bool MatchingEngine::cancel_order(const std::string& symbol, const std::string& order_id,
+                                  std::vector<ExecReport>* reports) {
     auto guard = lock();
-    
-    auto& book = get_or_create_book(symbol);
-    
-    nlohmann::json old_bbo = book.get_bbo();
-    bool success = book.cancel_order(order_id);
+
+    OrderBook* found = find_book(symbol);
+    if (!found) {
+        return false;  // unknown symbol: nothing to cancel or modify (and no book is created)
+    }
+    auto& book = *found;
+
+    std::vector<ExecReport> produced;
+    bool success = book.cancel_order(order_id, produced);
+    deliver(produced, reports);
 
     if (success) {
-        nlohmann::json new_bbo = book.get_bbo();
         if (bbo_callback_) {
-            bbo_callback_(symbol, new_bbo);
+            bbo_callback_(symbol, book.bbo());
         }
         if (depth_callback_) {
-            depth_callback_(symbol, book.get_l2_depth(10));
+            depth_callback_(symbol, book.depth(10));
         }
     }
 
     return success;
 }
 
-bool MatchingEngine::modify_order(const std::string& symbol, const std::string& order_id, Quantity new_qty, Price new_price, std::vector<Trade>& generated_trades) {
+bool MatchingEngine::modify_order(const std::string& symbol, const std::string& order_id, Quantity new_qty,
+                                  Price new_price, std::vector<Trade>& generated_trades,
+                                  std::vector<ExecReport>* reports) {
     auto guard = lock();
-    
-    auto& book = get_or_create_book(symbol);
-    
-    nlohmann::json old_bbo = book.get_bbo();
-    bool success = book.modify_order(order_id, new_qty, new_price, generated_trades);
+
+    OrderBook* found = find_book(symbol);
+    if (!found) {
+        return false;  // unknown symbol: nothing to cancel or modify (and no book is created)
+    }
+    auto& book = *found;
+
+    std::vector<ExecReport> produced;
+    bool success = book.modify_order(order_id, new_qty, new_price, generated_trades, produced);
+    deliver(produced, reports);
 
     if (success) {
         // Trigger trade callbacks if modification triggered fills
@@ -105,36 +184,89 @@ bool MatchingEngine::modify_order(const std::string& symbol, const std::string& 
             }
         }
 
-        nlohmann::json new_bbo = book.get_bbo();
         if (bbo_callback_) {
-            bbo_callback_(symbol, new_bbo);
+            bbo_callback_(symbol, book.bbo());
         }
         if (depth_callback_) {
-            depth_callback_(symbol, book.get_l2_depth(10));
+            depth_callback_(symbol, book.depth(10));
         }
     }
 
     return success;
 }
 
-nlohmann::json MatchingEngine::get_bbo(const std::string& symbol) {
+bool MatchingEngine::amend_order(const std::string& symbol, const std::string& order_id, Quantity new_total,
+                                 std::optional<Price> new_price, std::vector<Trade>& generated_trades,
+                                 std::vector<ExecReport>* reports) {
     auto guard = lock();
-    return get_or_create_book(symbol).get_bbo();
+
+    OrderBook* found = find_book(symbol);
+    if (!found) {
+        return false;  // unknown symbol: nothing to cancel or modify (and no book is created)
+    }
+    auto& book = *found;
+
+    std::vector<ExecReport> produced;
+    bool success = book.amend_order(order_id, new_total, new_price, generated_trades, produced);
+    deliver(produced, reports);
+
+    if (success) {
+        // Trigger trade callbacks if modification triggered fills
+        if (trade_callback_) {
+            for (const auto& trade : generated_trades) {
+                trade_callback_(symbol, trade);
+            }
+        }
+
+        if (bbo_callback_) {
+            bbo_callback_(symbol, book.bbo());
+        }
+        if (depth_callback_) {
+            depth_callback_(symbol, book.depth(10));
+        }
+    }
+
+    return success;
 }
 
-nlohmann::json MatchingEngine::get_l2_depth(const std::string& symbol, int depth) {
+Bbo MatchingEngine::bbo(const std::string& symbol) {
     auto guard = lock();
-    return get_or_create_book(symbol).get_l2_depth(depth);
+    if (OrderBook* book = find_book(symbol)) {
+        return book->bbo();
+    }
+    Bbo empty;
+    empty.timestamp = clock_->now_ns();
+    return empty;
+}
+
+Depth MatchingEngine::depth(const std::string& symbol, int levels) {
+    auto guard = lock();
+    if (OrderBook* book = find_book(symbol)) {
+        return book->depth(levels);
+    }
+    Depth empty;
+    empty.timestamp = clock_->now_ns();
+    return empty;
+}
+
+nlohmann::json MatchingEngine::get_bbo(const std::string& symbol) {
+    return bbo_to_json(symbol, bbo(symbol));
+}
+
+nlohmann::json MatchingEngine::get_l2_depth(const std::string& symbol, int depth_levels) {
+    return depth_to_json(symbol, depth(symbol, depth_levels));
 }
 
 std::vector<std::string> MatchingEngine::check_invariants(const std::string& symbol) {
     auto guard = lock();
-    return get_or_create_book(symbol).check_invariants();
+    OrderBook* book = find_book(symbol);
+    return book ? book->check_invariants() : std::vector<std::string>{};
 }
 
 bool MatchingEngine::is_crossed(const std::string& symbol) {
     auto guard = lock();
-    return get_or_create_book(symbol).is_crossed();
+    OrderBook* book = find_book(symbol);
+    return book && book->is_crossed();
 }
 
 void MatchingEngine::reset() {

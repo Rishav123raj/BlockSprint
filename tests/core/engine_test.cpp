@@ -96,10 +96,10 @@ TEST_CASE("two simulated runs are bit-identical, including trade IDs and timesta
 TEST_CASE("an engine without locking produces identical results") {
     MatchingEngine locked;
     MatchingEngine unlocked(std::make_shared<WallClock>(), EngineOptions{false});
-    WorkloadStats x = run_random_workload(locked, "LOCK", 20261101ULL, 5000);
-    WorkloadStats y = run_random_workload(unlocked, "LOCK", 20261101ULL, 5000);
+    WorkloadStats x = run_random_workload(locked, "LOCK", kGoldenSeed, 5000);
+    WorkloadStats y = run_random_workload(unlocked, "LOCK", kGoldenSeed, 5000);
     CHECK(x.hash == y.hash);
-    CHECK(x.hash == 11732550826495055626ULL); // the v1.0.0 golden hash
+    CHECK(x.hash == kGoldenHashStp);
 }
 
 TEST_CASE("a thread-safe engine stays consistent under concurrent use") {

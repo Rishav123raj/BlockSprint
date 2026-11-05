@@ -22,6 +22,24 @@
 | 2026-11-02 | Committed and pushed | 4 commits on `v2`; pushed `v2`, `release/v1` and tag `v1.0.0` (history kept as is, by decision). `main` untouched |
 | 2026-11-02 | **D22** found by the first CI run | `asio`/`websocketpp` were submodule pointers without `.gitmodules`, so no clone (1.0 included) could build the server. Registered as submodules pinned to the same release tags; CI checks out submodules |
 
+| 2026-11-02 | P1.9 done | STP by `owner_id` + per-order `StpPolicy` (none / skip / cancel_taker / cancel_maker (default, as Binance) / cancel_both) replaces the spoofable `BINANCE_` prefix. **D7** fixed (a remainder that would cross is cancelled), **D21** fixed (FOK dry run uses the same rules; FOK never rests), **D9** fixed (duplicate ID rejected; explicit `replace` in engine, `PUT /api/orders`, WS `replace`). Reserved owner `MARKET` accepted only from loopback. Two goldens: no-STP hash unchanged since 1.0 (`6980882564197707180`), STP-mixed re-pinned (`937915414169173351`). 54 tests / 351 assertions on MSVC + GCC; 17 live API checks |
+| 2026-11-02 | Connector found to be the source of live D7 | It applied all bids before removing stale asks, so a rising market briefly crossed the book. Now removes stale levels on both sides first, sends only changed levels (`replace`), and mirrors as owner `MARKET`/`skip`. Live: 0 crossed in 1,017 depth samples, full 10x10 books 99% of samples |
+
+| 2026-11-02 | P1.10 done | Execution reports (`src/core/events.hpp`): `ack`, `fill` (maker/taker, cum/leaves, trade_id), `amended`, `cancelled` (user, replaced, ioc_remainder, no_liquidity, fok_kill, would_cross, stp_taker, stp_maker), `rejected` (duplicate_order_id, invalid_quantity). Business rejects no longer throw. Engine: optional `reports` out-parameter on every mutating call plus a callback. API: `reports[]` in responses, rejected -> 400, new `/ws/executions` stream. Lifecycle contract checked on every report of 20 random workloads with all STP policies; two mutation tests confirm the checker catches missing terminal reports. 65 tests / 608 assertions on MSVC + GCC; both golden hashes unchanged; 11 + 17 live API checks |
+| 2026-11-02 | Connector bootstrap bug found (pre-existing, 1.0) | REST snapshots were fetched with blocking `requests.get` inside the async loop, so orders already handed to `ws.send()` sat unsent and books stayed half-built (0x0 / 1x0) for as long as Binance REST took (seconds from this PC). Fetch moved to a worker thread: 99.5% full 10x10 books, 0 crossed |
+
+| 2026-11-03 | Recorder keep-awake | The PC slept at 23:41 on 2026-11-02 and ~24 h of data were lost (1 h 43 min clean recording before that). The recorder now holds a Windows `SetThreadExecutionState` request against idle sleep while it runs (`research/data/keep_awake.py`, `--no-keep-awake` to disable; 4 tests). It cannot block user-initiated sleep, lid close or update restarts: see docs/recorder_ops.md |
+
+| 2026-11-04 | P1.18 (bench_core) built first, then P1.11 done | `bench_core`: passive / matching / mirror workloads, `sim` and `live` configs. P1.11: POD `Bbo` / `Depth` (`src/core/market_data.hpp`) on the hot path, BBO change detection by integer comparison, callbacks take the structs, JSON only at the boundary (`get_bbo` / `get_l2_depth` keep the 1.0 format). API: JSON built only when someone is subscribed; depth coalesced per symbol, at most every 100 ms. **Engine throughput 15-85x higher** (e.g. matching/sim 39k -> 639k ops/s on MSVC), see docs/baseline/bench_core.md. Plan target of 3M ops/s not met yet (allocation-bound, D15). perf_test 1,923 -> 6,207 orders/s. Tests unchanged: 65 / 608 |
+
+| 2026-11-04 | P1.12 done | `SymbolSpec` (tick, lot, min/max qty, min notional; exact 128-bit notional check) + `validate_order`: positive quantity, positive price for LIMIT/IOC/FOK (**D6 fixed**), Binance filters (**D12 fixed**). Rejections are `rejected` reports with reasons `invalid_price`, `price_tick`, `quantity_lot`, `quantity_range`, `min_notional`; an invalid modify is rejected and the order is unchanged. `Order::market_data_liquidity` exempts mirrored/replayed levels (real books hold levels below the minimum notional). Read-only queries, cancel and modify never create books (**D18 fixed**; cancel/modify still did, caught by a test). API: numbers or strings, 404 for unknown symbols, `POST /api/symbols` (loopback only) / `GET /api/symbols`. The connector loads Binance's real filters. 74 tests / 682 assertions on MSVC + GCC; 17 live checks; live mirror 0 crossed, 99.7% full |
+
+| 2026-11-05 | P1.13 done | Fee schedules per owner plus a default (`src/core/fees.hpp`); rates in 1e-8 fractions, negative = rebate. `fee` on every fill and `cum_fee` on every report, in quote currency, exact 128-bit arithmetic (shared `int128.hpp`); notionals above ~92 billion per fill saturate (Binance's largest BTC order is ~9 billion even at 1M USDT/BTC). Market-data liquidity pays nothing; fees never appear in the public trade feed. Live server defaults to Binance regular tier 0.10% / 0.10%; `POST /api/fees` (loopback) / `GET /api/fees`. Lifecycle checker now recomputes every fill's fee under real schedules (mutation-tested). 82 tests / 725 assertions on MSVC + GCC; 16 live checks; no measurable throughput cost |
+
+| 2026-11-05 | P1.14 done | Post-only orders: `OrderType::LIMIT_MAKER` (`limit_maker` / `post_only`), rejected with `post_only_would_take` if it would trade on arrival (also when amended to a crossing price). `amend_order(id, new_total, new_price?)`: Binance semantics, the new TOTAL quantity, priority kept only when reduced at the same price, total <= filled cancels the rest (**D11 fixed**); `modify_order` keeps the 1.0 open-quantity meaning (golden tests unchanged). API: `PATCH /api/orders`, WS `"amend"`. The random workload got an opt-in post-only + amend mode, so the lifecycle (fees included) and invariant checks cover them. A test helper ranged over part of a temporary JSON (read freed memory); fixed. 95 tests / 799 assertions on MSVC + GCC; 12 live checks plus all earlier ones |
+
+| 2026-11-05 | P1.15 done | Logger rewritten (**D19 fixed**): off until `open(LoggerOptions{path, level, flush_level, append})`, so tests, the benchmark and backtests write no files; `'\n'` instead of `std::endl`, flushed only at `flush_level` or on close; macros skip building the message when the level is off (one atomic load); ISO-8601 UTC timestamps; `Logger::run_log_path` gives each run its own file. Server flags `--log-file`, `--log-dir`, `--log-level`, `--no-log`, `--help`. 11 new tests (threads, buffering, truncation, unopenable paths); 106 tests / 857 assertions on MSVC + GCC; live: two runs gave two files, lines present after a hard kill |
+
 ---
 
 ## Table of Contents
@@ -248,13 +266,15 @@ gantt
 
 | Endpoint / message | 1.x behavior | 2.0 behavior |
 | :--- | :--- | :--- |
-| `POST /api/orders` | `{status, order_id, trades[]}` | Same fields, **plus** `reports[]`. Missing price on LIMIT/IOC/FOK ⇒ 400 (was: silently 0). |
-| Duplicate `order_id` | Silently replaces | **400 duplicate**. Use the new `action: "replace"` / `PUT /api/orders`. |
-| `/ws/orders` submit/cancel | Same | + `action: "amend"`, `"replace"`; response includes `reports[]` |
-| Numbers | Strings only, parsed with `std::stod` | Strings **or** numbers accepted (P1.12); responses keep strings. Since P1.6, values are parsed exactly and anything finer than 1e-8 is a 400 (1.x silently rounded it) |
-| `GET /api/bbo?symbol=X` on unknown X | Creates an empty book | **404** |
-| `/ws/executions` | — | **New:** stream of exec reports |
-| Connector participant | `BINANCE_` id prefix | `"owner": "MARKET"` field (accepted only from localhost in 2.0) |
+| `POST /api/orders` | `{status, order_id, trades[]}` | Same fields, **plus** `reports[]` (done, P1.10); a rejected order is a 400 with the report's `message`. Missing price on LIMIT/IOC/FOK ⇒ 400 `invalid_price` (was: silently 0; done, P1.12). Symbols with trading rules reject off-tick/lot, out-of-range and below-min-notional orders (done, P1.12). |
+| Duplicate `order_id` | Silently replaces | **400 duplicate** (done, P1.9). Use `action: "replace"` / `PUT /api/orders`. |
+| `/ws/orders` submit/cancel | Same | + `"replace"` (done, P1.9), `"amend"` (done, P1.14; also `PATCH /api/orders`); response includes `reports[]` (P1.10). Error responses echo `order_id` when known (done, P1.9) |
+| Numbers | Strings only, parsed with `std::stod` | Strings **or** numbers accepted (done, P1.12); responses keep strings. Since P1.6, values are parsed exactly and anything finer than 1e-8 is a 400 (1.x silently rounded it) |
+| `GET /api/bbo?symbol=X` on unknown X | Creates an empty book | **404** (done, P1.12; also `/api/depth`) |
+| `POST /api/symbols`, `GET /api/symbols` | — | **New** (P1.12): per-symbol trading rules; `POST` from localhost only |
+| `/ws/market-data` depth events | One per limit order (and per trade or BBO change) | Coalesced per symbol: at most one every 100 ms, always the latest book (done, P1.11). BBO events are still sent on every change |
+| `/ws/executions` | — | **New:** stream of exec reports (done, P1.10) |
+| Connector participant | `BINANCE_` id prefix | `"owner": "MARKET"` + `"stp": "skip"` (done, P1.9; `MARKET` accepted only from loopback). Any client may send `owner` / `stp` for its own orders |
 
 ### Tests added in P1
 Characterization (P1.3), invariants (P1.5), validator unit tests, fee tests, STP policy matrix (4 policies × maker/taker owners), the "never rest crossed" regression test for D7, the D6 regression test (sell without price ⇒ 400), fuzz (P1.16, ≥ 10⁶ ops in CI nightly and 10⁴ per PR), and determinism (P1.17).
@@ -623,9 +643,9 @@ Tick these off as phases complete.
 **Phase 1: Core Engine Refactor**
 - [x] P1.1 CMake split  - [x] P1.2 doctest  - [x] P1.3 Characterization  - [x] P1.4 Unified matching
 - [x] P1.5 Invariants  - [x] P1.6 Fixed-point  - [x] P1.7 Clock  - [x] P1.8 Instantiable engine
-- [ ] P1.9 STP/participants  - [ ] P1.10 Exec reports  - [ ] P1.11 POD hot path  - [ ] P1.12 Validation
-- [ ] P1.13 Fees  - [ ] P1.14 Post-only/amend  - [ ] P1.15 Logger  - [ ] P1.16 Fuzz
-- [ ] P1.17 Determinism  - [ ] P1.18 bench_core  - [ ] P1.19 Docs
+- [x] P1.9 STP/participants  - [x] P1.10 Exec reports  - [x] P1.11 POD hot path  - [x] P1.12 Validation
+- [x] P1.13 Fees  - [x] P1.14 Post-only/amend  - [x] P1.15 Logger  - [ ] P1.16 Fuzz
+- [ ] P1.17 Determinism  - [~] P1.18 bench_core (built; 3M ops/s target not met yet)  - [ ] P1.19 Docs
 
 **Phase 2: Historical Data Layer**
 - [x] P2.0 Package  - [x] P2.1 Recorder  - [x] P2.2 Snapshots  - [x] P2.3 Rotation  - [x] P2.4 Resilience

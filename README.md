@@ -203,7 +203,7 @@ The summary is printed to the console and must end with `Status: SUCCESS!`.
 ```powershell
 .\build\Release\crypto_matching_engine.exe
 ```
-The server starts listening on Port `8080` for REST requests and WebSocket client registrations.
+The server starts listening on Port `8080` for REST requests and WebSocket client registrations. Each run logs to its own file, `logs/matching_engine-YYYYMMDD-HHMMSS.log` (UTC). Use `--log-level debug|info|warn|error|off`, `--log-file PATH`, `--log-dir DIR` or `--no-log` to change that (`--help` lists them).
 
 #### 5. Start the Binance Live Sync Connector (Second Terminal)
 ```powershell
@@ -250,7 +250,7 @@ BlockSprint/
 │   │   └── matching_engine.hpp/.cpp # Thread-safe manager & cross-symbol registry
 │   ├── api/
 │   │   └── api_server.hpp/.cpp # HTTP REST and WebSocket router endpoints
-│   ├── logger.hpp              # Thread-safe timezone-aware logging
+│   ├── logger.hpp              # Thread-safe file logger (levels, per-run files)
 │   └── main.cpp                # Application startup and OS signal handling
 │
 ├── tests/core/                 # doctest unit tests (unit_tests target)
@@ -283,7 +283,7 @@ BlockSprint/
 │   └── websocketpp/            # WebSocket++ server framework headers
 │
 └── logs/                       # Performance and validation outputs
-    ├── matching_engine.log     # Engine execution and transaction logs
+    ├── matching_engine-*.log   # One engine log per run (UTC timestamps)
     ├── perf_test.log           # Throughput stats and benchmark results
     └── client_demo.log         # Client events and subscription flows
 ```

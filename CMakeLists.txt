@@ -12,6 +12,7 @@ endif()
 
 option(BLOCKSPRINT_BUILD_SERVER "Build the live REST/WebSocket server" ON)
 option(BLOCKSPRINT_BUILD_TESTS "Build the unit tests" ON)
+option(BLOCKSPRINT_BUILD_BENCH "Build the engine micro-benchmark" ON)
 
 find_package(Threads REQUIRED)
 
@@ -29,6 +30,8 @@ endfunction()
 # ---------------------------------------------------------------------------
 add_library(engine_core STATIC
     src/core/types.cpp
+    src/core/symbol_spec.cpp
+    src/core/fees.cpp
     src/core/order_book.cpp
     src/core/matching_engine.cpp
 )
@@ -82,6 +85,12 @@ if(BLOCKSPRINT_BUILD_TESTS)
         tests/core/invariant_test.cpp
         tests/core/types_test.cpp
         tests/core/engine_test.cpp
+        tests/core/stp_test.cpp
+        tests/core/exec_report_test.cpp
+        tests/core/validation_test.cpp
+        tests/core/fees_test.cpp
+        tests/core/post_only_amend_test.cpp
+        tests/core/logger_test.cpp
     )
     target_include_directories(unit_tests SYSTEM PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest
@@ -90,4 +99,13 @@ if(BLOCKSPRINT_BUILD_TESTS)
     blocksprint_warnings(unit_tests)
 
     add_test(NAME unit_tests COMMAND unit_tests)
+endif()
+
+# ---------------------------------------------------------------------------
+# bench_core: engine-only micro-benchmark (no networking)
+# ---------------------------------------------------------------------------
+if(BLOCKSPRINT_BUILD_BENCH)
+    add_executable(bench_core bench/bench_core.cpp)
+    target_link_libraries(bench_core PRIVATE engine_core)
+    blocksprint_warnings(bench_core)
 endif()
