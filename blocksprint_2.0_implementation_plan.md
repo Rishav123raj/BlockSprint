@@ -32,6 +32,7 @@
 | 2026-11-05 | P1.15 done | Logger rewritten (**D19 fixed**): off until `open(LoggerOptions{path, level, flush_level, append})`, so tests, the benchmark and backtests write no files; `'\n'` instead of `std::endl`, flushed only at `flush_level` or on close; macros skip building the message when the level is off (one atomic load); ISO-8601 UTC timestamps; `Logger::run_log_path` gives each run its own file. Server flags `--log-file`, `--log-dir`, `--log-level`, `--no-log`, `--help`. 11 new tests (threads, buffering, truncation, unopenable paths); 106 tests / 857 assertions on MSVC + GCC; live: two runs gave two files, lines present after a hard kill |
 | 2026-11-05 | P1.16 done | `tests/core/fuzz_test.cpp`: seeded random operations (all 5 order types, replace, cancel, modify, amend, 3 owners + mirrored liquidity with all STP policies, per-owner fees incl. a rebate, invalid and duplicate orders, unknown IDs and symbols, 2 books sharing trade/report counters) run in lockstep through the engine and a naive reference book (one flat vector, priority re-sorted on every use). After every op: return values, trades and exec-report streams compared field by field, full depth of both books compared, `check_invariants()`. Asserts every report type/reason actually occurs. 10^5 ops in the unit tests (~2.5 s), 10^6 in a new CI job on every push (`BLOCKSPRINT_FUZZ_OPS`, `BLOCKSPRINT_FUZZ_SEED` to replay). Mutation check: 8 of 8 injected engine bugs caught, each reported with seed, op and first differing field. No engine bug found. 108 tests / 888 assertions on MSVC + GCC |
 
+| 2026-11-05 | P1.17 done | `tests/core/determinism_test.cpp`: a seeded operation script (times included; 3 symbols, one with tick/lot/range/notional rules; all order types, replace, cancel, modify, amend, STP owners, mirrored liquidity, a maker rebate) is replayed into fresh `SimClock` engines. FNV-1a over the canonical JSON of every exec report (seq, timestamp and rejection text included), trade, BBO and depth callback, every return value and the final books: two replays and a lock-free engine give the same hash. **Golden stream hash 2815580882014666384, identical on MSVC and GCC**, pinned so CI checks it on Windows and Linux. Sensitivity checked (another seed, a 1 ns time shift, one op fewer; a one-word change in a rejection text also breaks it). 111 tests / 1409 assertions |
 ---
 
 ## Table of Contents
@@ -637,7 +638,7 @@ Tick these off as phases complete.
 - [x] P1.5 Invariants  - [x] P1.6 Fixed-point  - [x] P1.7 Clock  - [x] P1.8 Instantiable engine
 - [x] P1.9 STP/participants  - [x] P1.10 Exec reports  - [x] P1.11 POD hot path  - [x] P1.12 Validation
 - [x] P1.13 Fees  - [x] P1.14 Post-only/amend  - [x] P1.15 Logger  - [x] P1.16 Fuzz
-- [ ] P1.17 Determinism  - [~] P1.18 bench_core (built; 3M ops/s target not met yet)  - [ ] P1.19 Docs
+- [x] P1.17 Determinism  - [~] P1.18 bench_core (built; 3M ops/s target not met yet)  - [ ] P1.19 Docs
 
 **Phase 2: Historical Data Layer**
 - [x] P2.0 Package  - [x] P2.1 Recorder  - [x] P2.2 Snapshots  - [x] P2.3 Rotation  - [x] P2.4 Resilience

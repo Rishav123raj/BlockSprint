@@ -92,6 +92,7 @@ if(BLOCKSPRINT_BUILD_TESTS)
         tests/core/post_only_amend_test.cpp
         tests/core/logger_test.cpp
         tests/core/fuzz_test.cpp
+        tests/core/determinism_test.cpp
     )
     target_include_directories(unit_tests SYSTEM PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest
