@@ -56,7 +56,15 @@ Measured on 2026-11-02 over 88 s: about **3.5 kB/s per symbol** compressed (9.6�
 
 A scheduled task named **`BlockSprint Recorder`** runs [scripts/run_recorder.ps1](../scripts/run_recorder.ps1) hidden at every logon. That script restarts the recorder 10 s after it exits for any reason, and logs each restart to `logs/recorder_supervisor.log`. Task Scheduler also restarts the script itself if it dies. Killing the recorder process was tested: it was streaming again 13 s later.
 
-It runs while you're logged in (no admin rights or stored password needed). It does **not** run while the PC sleeps: Windows sleeps after 30 min idle on AC power by default, so set *Settings → System → Power & sleep → Sleep* to *Never* when plugged in.
+It runs while you're logged in (no admin rights or stored password needed). Nothing runs while the PC sleeps or is shut down; on 2026-11-02 a sleep at 23:41 lost about 24 hours of data.
+
+**Keep-awake (since 2026-11-03):** while it runs, the recorder holds a Windows "system required" request (`SetThreadExecutionState`, see [research/data/keep_awake.py](../research/data/keep_awake.py)), so Windows won't *idle*-sleep or idle-hibernate. The display can still turn off. The request is released automatically when the recorder exits or crashes. Pass `--no-keep-awake` to turn it off. Check it from an Administrator prompt with `powercfg /requests`: `python.exe` appears under `SYSTEM`.
+
+Keep-awake **cannot** stop sleep that you start, so for unbroken recording:
+- Don't choose *Start → Sleep*, and don't shut down.
+- Set *Control Panel → Power Options → Choose what closing the lid does → When I close the lid (Plugged in)* to **Do nothing**.
+- Keep the laptop plugged in.
+- Windows Update can still restart the PC. Set *Settings → Windows Update → Active hours* to cover the recording, or pause updates for a day. The scheduled task resumes recording at the next login, and the gap shows up in `inspect_raw`.
 
 Manage it from PowerShell:
 

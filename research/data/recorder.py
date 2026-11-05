@@ -17,6 +17,8 @@ Behavior:
 * Connection lifecycle (connecting, open, closed with reason) is written as ``event`` envelopes
   into every symbol's archive, so gaps are explicit in the data.
 * Exchange metadata (daily) and NTP clock samples (hourly) go to the ``_meta`` archive.
+* On Windows the recorder stops the machine from idle-sleeping while it runs (``--no-keep-awake`` to
+  disable), see :mod:`research.data.keep_awake`. It cannot prevent sleep the user starts.
 
 Usage::
 
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import logging
 import random
@@ -39,7 +42,7 @@ from pathlib import Path
 import requests
 import websockets
 
-from research.data import meta
+from research.data import keep_awake, meta
 from research.data.rawio import RawWriter, make_envelope
 
 WS_BASE = "wss://stream.binance.com:9443/stream?streams="
@@ -333,6 +336,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--duration", type=float, default=None, help="stop after this many seconds (testing)")
     p.add_argument("--log-file", type=Path, default=Path("logs/recorder.log"))
     p.add_argument("--no-validate", action="store_true", help="skip the exchangeInfo symbol check")
+    p.add_argument("--no-keep-awake", action="store_true",
+                   help="allow Windows to idle-sleep while recording (by default the recorder prevents it)")
     return p.parse_args(argv)
 
 
@@ -362,10 +367,16 @@ def main(argv: list[str] | None = None) -> None:
             except asyncio.TimeoutError:
                 log.info("duration of %.0fs reached", args.duration)
 
-    try:
-        asyncio.run(run())
-    except KeyboardInterrupt:
-        log.info("interrupted")
+    # Held by the main thread, which runs the event loop for the whole recording; released on exit
+    with keep_awake.KeepAwake() if not args.no_keep_awake else contextlib.nullcontext() as awake:
+        if awake is not None and awake.active:
+            log.info("keep-awake on: Windows will not idle-sleep while recording (the display may still turn off)")
+        elif not args.no_keep_awake:
+            log.info("keep-awake not available on this platform")
+        try:
+            asyncio.run(run())
+        except KeyboardInterrupt:
+            log.info("interrupted")
 
 
 if __name__ == "__main__":
