@@ -108,3 +108,7 @@ Then `systemctl enable --now blocksprint-recorder` and keep the clock synced wit
 ## Rate limits
 
 A `limit=5000` depth snapshot costs 250 request weight; Binance allows 6,000 per minute per IP. The defaults (one snapshot per symbol every 10 min, spaced 1 s apart) use well under 1% of that. On HTTP 429 or 418 the recorder backs off for the `Retry-After` period.
+
+## Next steps for the data
+
+Normalizing, checking, packing and cataloguing the recorded data: [data_pipeline.md](data_pipeline.md).

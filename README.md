@@ -267,11 +267,12 @@ BlockSprint/
 │   ├── test_helpers.hpp        # Order builders and engine fixture
 │   ├── workload.hpp            # Seeded random workload and golden hashes
 │   └── test_main.cpp           # doctest entry point
+├── tests/python/               # pytest: recorder and data pipeline
 │
 ├── bench/bench_core.cpp        # Engine throughput benchmark (docs/baseline/bench_core.md)
 │
-├── research/data/              # 2.0 market-data recorder, raw archive I/O, quality inspector
-│                               #   (see docs/recorder_ops.md)
+├── research/data/              # 2.0 market-data pipeline: recorder, normalizer, QC, packer, catalog,
+│                               #   downloader (see docs/recorder_ops.md and docs/data_pipeline.md)
 │
 ├── scripts/                    # Python Validation and Benchmarking Clients
 │   ├── run_all.py              # Unified project builder, daemon manager, and validation script

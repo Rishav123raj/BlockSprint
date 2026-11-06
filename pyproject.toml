@@ -5,6 +5,9 @@ description = "BlockSprint - C++ matching engine and microstructure-aware backte
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "numpy>=2.1",
+    "orjson>=3.10",
+    "pyarrow>=18",
     "requests>=2.34.2",
     "websockets>=16.0",
     "zstandard>=0.23",

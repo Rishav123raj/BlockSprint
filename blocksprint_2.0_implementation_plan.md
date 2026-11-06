@@ -34,6 +34,7 @@
 | 2026-11-05 | P1.17 done | `tests/core/determinism_test.cpp`: a seeded operation script (times included; 3 symbols, one with tick/lot/range/notional rules; all order types, replace, cancel, modify, amend, STP owners, mirrored liquidity, a maker rebate) is replayed into fresh `SimClock` engines. FNV-1a over the canonical JSON of every exec report (seq, timestamp and rejection text included), trade, BBO and depth callback, every return value and the final books: two replays and a lock-free engine give the same hash. **Golden stream hash 2815580882014666384, identical on MSVC and GCC**, pinned so CI checks it on Windows and Linux. Sensitivity checked (another seed, a 1 ns time shift, one op fewer; a one-word change in a rejection text also breaks it). 111 tests / 1409 assertions |
 | 2026-11-06 | P1.18 done | Hot path: one clock read per engine call (was 4–8 at ~39 ns each), no `ExecReport` built when nobody receives it, reused report buffer, **intrusive FIFO per level** instead of `std::list<shared_ptr>` (D15, first half), a per-book `std::pmr` pool for the price maps and the order lookup (keyed by `string_view` into the order's ID), fewer shared_ptr copies. Duplicate submissions are now rejected before the order is touched (with intrusive links, resubmitting the resting object would have unlinked it); regression test added. `bench_core` now separates engine time from order creation (~210 ns per heap order) and uses `SimClock` for `sim`. **2.0–2.6x faster in sim, 1.6–1.8x in live** (GCC, same benchmark). MSVC engine ops/s in sim: passive 2.79 M, matching 2.71 M, mirror 3.20 M: **3 M target met by mirror only, the others at 90–95%**; 2.0–2.3 M including order creation. The rest needs integer handles and an engine-owned order pool (P3.18 path). LTO tried, no gain. Determinism hash and golden hashes unchanged; 10^6 fuzz ops pass; 74 live API checks pass. 112 tests / 1421 assertions |
 | 2026-11-06 | P1.19 done, **Phase 1 complete** | `explanations/` brought up to the 2.0 core. Rewritten: `order_book.md` (fixed-point levels, intrusive FIFO, pmr pool, flow diagram, STP, amend vs modify, fees, invariants), `models.md`, `main.md`. Updated: `matching_engine.md`, `events.md`, `api_server.md`. New: `types.md`, `clock.md`, `market_data.md`, `symbol_spec.md`, `fees.md`, `tests.md`. README tree updated |
+| 2026-11-06 | P2.7–P2.14 done | Normalizer (`research/data/normalize.py`, schema in `schema.py`): Binance book sync, duplicate drop, GAP + segments, ticks/lots per date's spec, day-start synthetic snapshots, monotonic ts_local (clamped + flagged), bulk conversion via Arrow (identical output to a per-row first version). Parquet partitions `venue=/market=/symbol=/date=` with book/trade/snapshot + meta.json. Reference book (`refbook.py`). QC (`qc.py`): exact top-20 snapshot reconstruction (levels of the spanning event excluded), crossed/locked, grid, ts monotonicity, latency, coverage, trades-vs-BBO by exchange time; qc.json + qc.html; pass/partial/fail. Downloader (`downloader.py`): data.binance.vision trades/aggTrades/klines, SHA-256 verified, ms/µs timestamps. Packer (`pack.py`): `.bse` v1 per §14.2, stable merge, refuses failed/unchecked/changed/mixed-spec data. Catalog (`catalog.py`): list/show/verify. 23 new pytest tests (golden output, gap, old snapshot, overlap duplicates, clamp, off-grid, tick change across days, QC corruption, pack refusals, catalog tamper, offline downloader); 40 total. **Real data: 10 symbol-dates normalized, 361/361 snapshots match, never crossed; all dates `partial` (best 61.5%) because of recording gaps. Recorded Nov 4 trades = public aggTrades 100%. Nov 5 packed, round trip identical.** Command guide: docs/data_pipeline.md. New deps: pyarrow, numpy, orjson |
 
 ---
 
@@ -342,9 +343,9 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 | `flags` | uint16 | bit0 `LAST_IN_BATCH`, bit1 `FROM_SNAPSHOT`, bit2 `DUPLICATE_SUSPECT` |
 
 ### Acceptance criteria
-- [ ] ≥ 3 full clean days for BTCUSDT and ETHUSDT normalized, QC green, and packed.
-- [ ] The Python reference book matches 100% of periodic snapshots on clean segments.
-- [ ] `catalog.py list` shows the datasets with hashes.
+- [ ] ≥ 3 full clean days for BTCUSDT and ETHUSDT normalized, QC green, and packed. (Pipeline ready; waiting on complete recording days: best so far 61.5% coverage.)
+- [x] The Python reference book matches 100% of periodic snapshots on clean segments (361/361 on Nov 2–6).
+- [x] `catalog.py list` shows the datasets with hashes.
 - [ ] Tag `v2.0.0-p2`.
 
 ### Risks
@@ -644,8 +645,8 @@ Tick these off as phases complete.
 
 **Phase 2: Historical Data Layer**
 - [x] P2.0 Package  - [x] P2.1 Recorder  - [x] P2.2 Snapshots  - [x] P2.3 Rotation  - [x] P2.4 Resilience
-- [x] P2.5 Metadata  - [x] P2.6 Deployment (Windows scheduled task "BlockSprint Recorder", running since 2026-11-02; Tokyo VPS still recommended for latency work)  - [ ] P2.7 Normalizer  - [ ] P2.8 Parquet  - [ ] P2.9 Ref book
-- [ ] P2.10 QC  - [ ] P2.11 Downloader  - [ ] P2.12 Packer  - [ ] P2.13 Catalog  - [ ] P2.14 Tests
+- [x] P2.5 Metadata  - [x] P2.6 Deployment (Windows scheduled task "BlockSprint Recorder", running since 2026-11-02; Tokyo VPS still recommended for latency work)  - [x] P2.7 Normalizer  - [x] P2.8 Parquet  - [x] P2.9 Ref book
+- [x] P2.10 QC  - [x] P2.11 Downloader  - [x] P2.12 Packer  - [x] P2.13 Catalog  - [x] P2.14 Tests
 
 **Phase 3: C++ Simulator Core**
 - [ ] P3.1 Targets  - [ ] P3.2 RNG  - [ ] P3.3 EventQueue  - [ ] P3.4 Reader  - [ ] P3.5 Reconstruction (V0)

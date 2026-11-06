@@ -140,10 +140,11 @@ class RawWriter:
         self.closed_files.append(final)
 
 
-def read_raw(path: Path | str) -> Iterator[dict[str, Any]]:
+def read_raw(path: Path | str, loads: Callable[[str], Any] = json.loads) -> Iterator[dict[str, Any]]:
     """Yield the envelopes of one archive file (``.jsonl.zst`` or a crash-truncated ``.part``).
 
     A ``.part`` file may end in an incomplete zstd frame or line; reading stops cleanly there.
+    ``loads`` parses each line (e.g. ``orjson.loads`` for speed).
     """
     with open(path, "rb") as fh:
         reader = zstandard.ZstdDecompressor().stream_reader(fh, read_across_frames=True)
@@ -152,7 +153,7 @@ def read_raw(path: Path | str) -> Iterator[dict[str, Any]]:
             for line in text:
                 if not line.endswith("\n"):
                     return  # truncated last line of a crashed .part file
-                yield json.loads(line)
+                yield loads(line)
         except zstandard.ZstdError:
             if str(path).endswith(PART_SUFFIX):
                 return  # truncated last frame of a crashed .part file
