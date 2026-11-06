@@ -239,6 +239,20 @@ Public data has no local receive time, so `ts_local = ts_exch`. Files appear abo
 
 ---
 
+## 6b. Into the simulator: replay and validation gate V0
+
+The C++ simulator (Phase 3, [simulator_architecture.md](simulator_architecture.md)) reads `.bse` files directly:
+
+```powershell
+cmake -B build; cmake --build build --config Release --target bs_sim sim_tests
+build\Release\sim_tests.exe                                                           # simulator unit tests
+build\Release\bs_sim.exe info data/packed/<dataset>/BTCUSDT.bse                        # header, batches, segments
+build\Release\bs_sim.exe reconstruct data/packed/<dataset>/BTCUSDT.bse --every 5000 --top 20 --out v0_btc.csv
+uv run python -m research.sim.check_reconstruct --dump v0_btc.csv --symbol BTCUSDT --dates 2026-11-05   # V0 PASS / FAIL
+```
+
+`reconstruct` replays the book from the data alone (no strategy) and dumps the top N levels per side every K book batches (and at `--at` times). The checker replays the same dates' `book.parquet` through the Python oracle and compares every checkpoint exactly. List the dates in the order they were packed. On Linux the binaries are `build/bs_sim` and `build/sim_tests`.
+
 ## 7. Tests
 
 ```powershell

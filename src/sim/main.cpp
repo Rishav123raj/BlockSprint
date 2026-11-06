@@ -1,0 +1,239 @@
+// bs_sim: the simulator's command line (P3.14).
+//
+//   bs_sim info FILE.bse                    header, records and batches by kind, segments, time range
+//   bs_sim reconstruct FILE.bse [options]   replay the book from the data alone; checkpoint dumps for V0
+//   bs_sim run CONFIG.json                  a full simulation (P3.11, not yet available)
+#include "reconstruct.hpp"
+#include "replayer.hpp"
+
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include <fstream>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+using namespace sim;
+
+namespace {
+
+void usage() {
+    std::cout <<
+        "Usage:\n"
+        "  bs_sim info FILE.bse\n"
+        "  bs_sim reconstruct FILE.bse [--top N] [--every K] [--at TIME]... [--out DUMP.csv]\n"
+        "      --top N      levels per side in each checkpoint (default 20)\n"
+        "      --every K    checkpoint every K book batches (default 0: none)\n"
+        "      --at TIME    checkpoint at a time: ns since the epoch or 2026-11-05T12:00:00Z (repeatable)\n"
+        "      --out PATH   write checkpoints as CSV (batch,ts_local,valid,side,level,px,qty)\n"
+        "  bs_sim run CONFIG.json   (not available yet: Phase 3, P3.11)\n";
+}
+
+// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm): portable, no timegm
+int64_t days_from_civil(int64_t y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + static_cast<int64_t>(doe) - 719468;
+}
+
+int64_t parse_time(const std::string& text) {
+    if (text.find('T') == std::string::npos) {
+        return std::stoll(text);
+    }
+    // YYYY-MM-DDTHH:MM:SS[.fffffffff]Z
+    if (text.size() < 20 || text[4] != '-' || text[7] != '-' || text[10] != 'T' || text[13] != ':' ||
+        text[16] != ':' || text.back() != 'Z') {
+        throw std::invalid_argument("bad time: " + text + " (use ns or YYYY-MM-DDTHH:MM:SSZ)");
+    }
+    const int y = std::stoi(text.substr(0, 4)), mo = std::stoi(text.substr(5, 2)), d = std::stoi(text.substr(8, 2));
+    const int h = std::stoi(text.substr(11, 2)), mi = std::stoi(text.substr(14, 2)), s = std::stoi(text.substr(17, 2));
+    int64_t frac_ns = 0;
+    if (text.size() > 21 && text[19] == '.') {
+        std::string digits = text.substr(20, text.size() - 21);
+        digits.resize(9, '0');
+        frac_ns = std::stoll(digits);
+    }
+    const int64_t secs = days_from_civil(y, static_cast<unsigned>(mo), static_cast<unsigned>(d)) * 86400 +
+                         h * 3600 + mi * 60 + s;
+    return secs * 1000000000LL + frac_ns;
+}
+
+std::string iso(int64_t ns) {
+    std::time_t secs = static_cast<std::time_t>(ns / 1000000000LL);
+    std::tm tm_val{};
+#if defined(_WIN32)
+    gmtime_s(&tm_val, &secs);
+#else
+    gmtime_r(&secs, &tm_val);
+#endif
+    char buf[40];
+    std::snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", tm_val.tm_year + 1900, tm_val.tm_mon + 1,
+                  tm_val.tm_mday, tm_val.tm_hour, tm_val.tm_min, tm_val.tm_sec,
+                  static_cast<int>((ns / 1000000) % 1000));
+    return buf;
+}
+
+// ticks/lots -> decimal text using the header's step (1e-8 units) and decimals
+std::string decimal(int64_t units, int64_t step, int decimals) {
+    const int64_t fixed = units * step;  // 1e-8 units
+    const int64_t whole = fixed / 100000000;
+    int64_t frac = fixed % 100000000;
+    for (int i = 8; i > decimals; --i) {
+        frac /= 10;
+    }
+    char buf[64];
+    if (decimals == 0) {
+        std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(whole));
+    } else {
+        std::snprintf(buf, sizeof(buf), "%lld.%0*lld", static_cast<long long>(whole), decimals, static_cast<long long>(frac));
+    }
+    return buf;
+}
+
+void print_header(const bse::Header& h, const std::string& path) {
+    static const char* hex = "0123456789abcdef";
+    std::string sha;
+    for (uint8_t b : h.source_manifest_sha256) {
+        sha += hex[b >> 4];
+        sha += hex[b & 15];
+    }
+    std::cout << "file            " << path << "\n"
+              << "format          bse v" << h.version << ", " << h.record_size << "-byte records\n"
+              << "symbol          " << h.symbol << "\n"
+              << "tick / lot      " << decimal(1, h.tick_size, 8) << " / " << decimal(1, h.lot_size, 8)
+              << "  (price decimals " << int(h.price_decimals) << ", qty decimals " << int(h.qty_decimals) << ")\n"
+              << "min notional    " << decimal(1, h.min_notional, 8) << "\n"
+              << "records         " << h.record_count << "\n"
+              << "time range      " << iso(h.first_ts_local) << " .. " << iso(h.last_ts_local) << "\n"
+              << "source manifest " << sha << "\n";
+}
+
+int cmd_info(const std::string& path) {
+    Replayer rp(path);
+    print_header(rp.header(), path);
+    uint64_t by_kind[6] = {};
+    uint64_t batches[4] = {};
+    uint64_t backwards = 0;
+    int64_t prev = INT64_MIN;
+    for (uint64_t i = 0; i < rp.record_count(); ++i) {
+        const auto& r = rp.records()[i];
+        if (r.kind < 6) {
+            ++by_kind[r.kind];
+        }
+        if (r.ts_local < prev) {
+            ++backwards;
+        }
+        prev = r.ts_local;
+    }
+    auto t0 = std::chrono::steady_clock::now();
+    Batch b{};
+    while (rp.next(b)) {
+        ++batches[static_cast<int>(b.kind)];
+    }
+    double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    std::cout << "records by kind ";
+    for (int k = 0; k < 6; ++k) {
+        std::cout << bse::kind_name(static_cast<uint8_t>(k)) << ' ' << by_kind[k] << (k < 5 ? ", " : "\n");
+    }
+    std::cout << "batches         depth " << batches[0] << ", snapshot " << batches[1] << ", trade " << batches[2]
+              << ", gap " << batches[3] << "  (scanned in " << secs << " s)\n"
+              << "segments        " << batches[3] + 1 << "\n"
+              << "ts_local        " << (backwards ? "DECREASES " + std::to_string(backwards) + " times" : "non-decreasing")
+              << "\n";
+    return backwards ? 1 : 0;
+}
+
+int cmd_reconstruct(const std::string& path, const std::vector<std::string>& args) {
+    ReconstructOptions opt;
+    std::string out_path;
+    for (size_t i = 0; i < args.size(); ++i) {
+        auto value = [&]() -> const std::string& {
+            if (i + 1 >= args.size()) {
+                throw std::invalid_argument(args[i] + " needs a value");
+            }
+            return args[++i];
+        };
+        if (args[i] == "--top") {
+            opt.top_n = std::stoul(value());
+        } else if (args[i] == "--every") {
+            opt.every = std::stoull(value());
+        } else if (args[i] == "--at") {
+            opt.at_ts.push_back(parse_time(value()));
+        } else if (args[i] == "--out") {
+            out_path = value();
+        } else {
+            throw std::invalid_argument("unknown option " + args[i]);
+        }
+    }
+    Replayer rp(path);
+    const auto& h = rp.header();
+    std::ofstream out;
+    if (!out_path.empty()) {
+        out.open(out_path, std::ios::trunc);
+        if (!out) {
+            throw std::runtime_error("can't write " + out_path);
+        }
+    }
+    Reconstructor r;
+    auto t0 = std::chrono::steady_clock::now();
+    ReconstructStats s = reconstruct(rp, r, opt, out_path.empty() ? nullptr : &out);
+    double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+    std::cout << h.symbol << ": " << s.records << " records, " << s.book_batches << " book batches ("
+              << s.batches[0] << " depth, " << s.batches[1] << " snapshots, " << s.batches[3] << " gaps), "
+              << s.batches[2] << " trades, " << s.segments << " segment(s)\n"
+              << "replayed in " << secs << " s: " << static_cast<uint64_t>(s.records / (secs > 0 ? secs : 1e-9))
+              << " records/s\n"
+              << "crossed after a depth event: " << s.crossed_batches << "; ts_local going back: " << s.ts_backwards
+              << "\n";
+    if (!out_path.empty()) {
+        std::cout << s.checkpoints << " checkpoint(s) of top " << opt.top_n << " written to " << out_path << "\n";
+    }
+
+    // Final book, top 5
+    std::vector<Level> bids, asks;
+    r.book().top(0, 5, bids);
+    r.book().top(1, 5, asks);
+    std::cout << "final book (" << (r.valid() ? "valid" : "invalid: after a gap") << ")\n";
+    for (size_t i = 0; i < std::max(bids.size(), asks.size()); ++i) {
+        std::string bid = i < bids.size() ? decimal(bids[i].qty, h.lot_size, h.qty_decimals) + " @ " +
+                                                decimal(bids[i].px, h.tick_size, h.price_decimals) : "";
+        std::string ask = i < asks.size() ? decimal(asks[i].px, h.tick_size, h.price_decimals) + " x " +
+                                                decimal(asks[i].qty, h.lot_size, h.qty_decimals) : "";
+        std::printf("  %28s | %-28s\n", bid.c_str(), ask.c_str());
+    }
+    return (s.crossed_batches || s.ts_backwards) ? 1 : 0;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    std::vector<std::string> args(argv + 1, argv + argc);
+    if (args.empty() || args[0] == "--help" || args[0] == "-h") {
+        usage();
+        return args.empty() ? 2 : 0;
+    }
+    try {
+        if (args[0] == "info" && args.size() == 2) {
+            return cmd_info(args[1]);
+        }
+        if (args[0] == "reconstruct" && args.size() >= 2) {
+            return cmd_reconstruct(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
+        }
+        if (args[0] == "run") {
+            std::cerr << "bs_sim run: not available yet (Phase 3, P3.11)\n";
+            return 2;
+        }
+        usage();
+        return 2;
+    } catch (const std::exception& e) {
+        std::cerr << "error: " << e.what() << "\n";
+        return 1;
+    }
+}

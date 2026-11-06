@@ -13,6 +13,7 @@ endif()
 option(BLOCKSPRINT_BUILD_SERVER "Build the live REST/WebSocket server" ON)
 option(BLOCKSPRINT_BUILD_TESTS "Build the unit tests" ON)
 option(BLOCKSPRINT_BUILD_BENCH "Build the engine micro-benchmark" ON)
+option(BLOCKSPRINT_BUILD_SIM "Build the simulator (sim library, bs_sim, sim_tests)" ON)
 
 find_package(Threads REQUIRED)
 
@@ -101,6 +102,37 @@ if(BLOCKSPRINT_BUILD_TESTS)
     blocksprint_warnings(unit_tests)
 
     add_test(NAME unit_tests COMMAND unit_tests)
+endif()
+
+# ---------------------------------------------------------------------------
+# sim + bs_sim + sim_tests: the market simulator (Phase 3; docs/simulator_architecture.md)
+# ---------------------------------------------------------------------------
+if(BLOCKSPRINT_BUILD_SIM)
+    add_library(sim STATIC
+        src/sim/bse.cpp
+        src/sim/mmap_file.cpp
+        src/sim/replayer.cpp
+        src/sim/reconstruct.cpp
+    )
+    target_include_directories(sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/sim)
+    target_link_libraries(sim PUBLIC engine_core)
+    blocksprint_warnings(sim)
+
+    add_executable(bs_sim src/sim/main.cpp)
+    target_link_libraries(bs_sim PRIVATE sim)
+    blocksprint_warnings(bs_sim)
+
+    if(BLOCKSPRINT_BUILD_TESTS)
+        add_executable(sim_tests
+            tests/sim/test_main.cpp
+            tests/sim/rng_queue_test.cpp
+            tests/sim/replay_test.cpp
+        )
+        target_include_directories(sim_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest)
+        target_link_libraries(sim_tests PRIVATE sim)
+        blocksprint_warnings(sim_tests)
+        add_test(NAME sim_tests COMMAND sim_tests)
+    endif()
 endif()
 
 # ---------------------------------------------------------------------------

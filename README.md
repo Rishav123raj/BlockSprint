@@ -253,6 +253,8 @@ BlockSprint/
 │   │   ├── fees.hpp/.cpp       # Maker/taker fee schedules and exact fee math
 │   │   ├── order_book.hpp/.cpp # Price-time order book: matching, STP, amend, intrusive queues
 │   │   └── matching_engine.hpp/.cpp # Instantiable engine: books per symbol, clock, callbacks
+│   ├── sim/                    # Market simulator (Phase 3, docs/simulator_architecture.md):
+│   │                           #   RNG, event queue, .bse reader, reconstruction, bs_sim CLI
 │   ├── api/
 │   │   └── api_server.hpp/.cpp # HTTP REST and WebSocket router endpoints
 │   ├── logger.hpp              # Thread-safe file logger (levels, per-run files)
@@ -267,12 +269,14 @@ BlockSprint/
 │   ├── test_helpers.hpp        # Order builders and engine fixture
 │   ├── workload.hpp            # Seeded random workload and golden hashes
 │   └── test_main.cpp           # doctest entry point
+├── tests/sim/                  # simulator unit tests (sim_tests target)
 ├── tests/python/               # pytest: recorder and data pipeline
 │
 ├── bench/bench_core.cpp        # Engine throughput benchmark (docs/baseline/bench_core.md)
 │
 ├── research/data/              # 2.0 market-data pipeline: recorder, normalizer, QC, packer, catalog,
 │                               #   downloader (see docs/recorder_ops.md and docs/data_pipeline.md)
+├── research/sim/               # Simulator validation (check_reconstruct.py: gate V0)
 │
 ├── scripts/                    # Python Validation and Benchmarking Clients
 │   ├── run_all.py              # Unified project builder, daemon manager, and validation script
