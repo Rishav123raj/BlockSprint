@@ -6,17 +6,41 @@
 #include "models.hpp"
 #include "symbol_spec.hpp"
 #include <map>
+#include <memory>
+#include <memory_resource>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
-#include <string>
-#include <memory>
-#include <list>
 
+// One price level: its orders in time priority, as an intrusive doubly linked list through
+// Order::queue_prev / queue_next (oldest first). The level doesn't own them; OrderBook's lookup does.
 struct PriceLevel {
     Price price = 0;
     Quantity total_quantity = 0;
-    std::list<std::shared_ptr<Order>> orders;
+    Order* head = nullptr;  // oldest order: matched first
+    Order* tail = nullptr;  // newest order
+    size_t count = 0;
+
+    bool empty() const { return head == nullptr; }
+
+    void push_back(Order& order) {
+        order.queue_prev = tail;
+        order.queue_next = nullptr;
+        (tail ? tail->queue_next : head) = &order;
+        tail = &order;
+        order.queued = true;
+        ++count;
+    }
+
+    // Unlinks a queued order of this level; its queue_next stays readable for an ongoing iteration
+    void unlink(Order& order) {
+        (order.queue_prev ? order.queue_prev->queue_next : head) = order.queue_next;
+        (order.queue_next ? order.queue_next->queue_prev : tail) = order.queue_prev;
+        order.queued = false;
+        --count;
+    }
 };
 
 // Every mutating call appends the execution reports it produces to `reports` (see events.hpp).
@@ -33,11 +57,11 @@ public:
     // a rule (validate_order: quantity, price, and the symbol spec if one is set).
     // A LIMIT remainder rests only if it does not cross the book; otherwise it is cancelled (WOULD_CROSS).
     // That can only happen when self-trade prevention skipped resting orders.
-    std::vector<Trade> submit_order(std::shared_ptr<Order> order, std::vector<ExecReport>& reports);
+    std::vector<Trade> submit_order(const std::shared_ptr<Order>& order, std::vector<ExecReport>& reports);
 
     // Cancels the resting order with the same ID (if any, reason REPLACED), then submits the new one.
     // The new order joins the back of its price level's queue.
-    std::vector<Trade> replace_order(std::shared_ptr<Order> order, std::vector<ExecReport>& reports);
+    std::vector<Trade> replace_order(const std::shared_ptr<Order>& order, std::vector<ExecReport>& reports);
 
     // Cancels an order by ID. Returns true if successful.
     bool cancel_order(const std::string& order_id, std::vector<ExecReport>& reports);
@@ -59,7 +83,16 @@ public:
     bool modify_order(const std::string& order_id, Quantity new_qty, Price new_price,
                       std::vector<Trade>& generated_trades, std::vector<ExecReport>& reports);
 
-    // Best Bid and Best Offer, timestamped by the book's clock
+    // Starts one engine call (P1.18). Every report, trade and snapshot of the call carries `now`, so the
+    // clock is read once per call rather than once per event. Reports are built only if `reporting`
+    // (someone receives them); their sequence numbers advance either way, so a run's numbering doesn't
+    // depend on who listens.
+    void begin_call(uint64_t now, bool reporting) {
+        now_ = now;
+        reporting_ = reporting;
+    }
+
+    // Best Bid and Best Offer, timestamped with the current call's time
     Bbo bbo() const;
 
     // Top `levels` aggregated price levels per side, best first
@@ -80,23 +113,31 @@ public:
 
 private:
     std::string symbol_;
-    const IClock& clock_;
+    uint64_t now_ = 0;        // time of the current call (begin_call)
+    bool reporting_ = true;   // build reports in the current call
+    ExecReport discarded_;    // written instead of a report nobody receives
     uint64_t& trade_id_seq_;
     uint64_t& report_seq_;
     const FeeBook& fees_;
     std::optional<SymbolSpec> spec_;
 
+    // Node memory for the price maps and the order lookup (P1.18): a pool per book, so resting, filling
+    // and cancelling orders and creating and emptying levels don't go through the global heap. Declared
+    // before the containers so that it outlives them.
+    std::pmr::unsynchronized_pool_resource pool_;
+
     // Bids: Sorted in descending order (highest price first)
-    std::map<Price, PriceLevel, std::greater<Price>> bids_;
+    std::pmr::map<Price, PriceLevel, std::greater<Price>> bids_{&pool_};
 
     // Asks: Sorted in ascending order (lowest price first)
-    std::map<Price, PriceLevel, std::less<Price>> asks_;
+    std::pmr::map<Price, PriceLevel, std::less<Price>> asks_{&pool_};
 
-    // Order lookup by ID
-    std::unordered_map<std::string, std::shared_ptr<Order>> orders_lookup_;
+    // Resting orders by ID. The key views the order's own order_id (no copy of the ID); it stays valid
+    // because the entry owns the order and a resting order's ID never changes.
+    std::pmr::unordered_map<std::string_view, std::shared_ptr<Order>> orders_lookup_{&pool_};
 
     // Validates, reports first_report (ACK, or AMENDED for a modify), matches and rests or cancels the remainder
-    std::vector<Trade> submit_internal(std::shared_ptr<Order> order, std::vector<ExecReport>& reports,
+    std::vector<Trade> submit_internal(const std::shared_ptr<Order>& order, std::vector<ExecReport>& reports,
                                        ExecType first_report);
 
     // Rejection message for a post-only order that would trade
@@ -106,6 +147,7 @@ private:
     std::shared_ptr<Order> erase_order(const std::string& order_id);
 
     // Appends a report describing the order's current state and returns it for further fields
+    // (a scratch report when the call isn't reporting)
     ExecReport& report(std::vector<ExecReport>& reports, ExecType type, const Order& order,
                        ExecReason reason = ExecReason::NONE);
 
@@ -113,18 +155,18 @@ private:
     // With enforce_limit, stops at the first level the order's price does not cross (LIMIT/IOC/FOK);
     // without it, sweeps until filled or the side is empty (MARKET). Never rests the remainder.
     // taker_cancelled is set when self-trade prevention cancelled the rest of the incoming order.
-    std::vector<Trade> match_against_book(std::shared_ptr<Order> order, bool enforce_limit, bool& taker_cancelled,
+    std::vector<Trade> match_against_book(Order& order, bool enforce_limit, bool& taker_cancelled,
                                           std::vector<ExecReport>& reports);
 
     template <typename BookSide>
-    void sweep(BookSide& book_side, const std::shared_ptr<Order>& order, bool enforce_limit,
+    void sweep(BookSide& book_side, Order& order, bool enforce_limit,
                std::vector<Trade>& trades, bool& taker_cancelled, std::vector<ExecReport>& reports);
 
     // True if a resting order at this price would cross the opposite side
     bool would_cross(const Order& order) const;
 
     // Dry-run simulation for FOK orders
-    bool can_fok_be_fully_filled(std::shared_ptr<Order> order) const;
+    bool can_fok_be_fully_filled(const Order& order) const;
 
     template <typename BookSide>
     bool has_fillable_liquidity(const BookSide& book_side, const Order& order) const;
@@ -134,8 +176,12 @@ private:
                     size_t& resting_orders) const;
 
     // Helper to insert a resting order into the book
-    void add_resting_order(std::shared_ptr<Order> order);
+    void add_resting_order(const std::shared_ptr<Order>& order);
 
     // Helper to erase an order from the book data structures
-    void remove_order_from_book(std::shared_ptr<Order> order);
+    void remove_order_from_book(Order& order);
+
+    // Unlinks a filled or STP-cancelled maker from its level and drops it from the lookup, which may
+    // destroy it: always the last use of `maker`
+    void release_maker(PriceLevel& level, Order& maker);
 };

@@ -96,6 +96,28 @@ public:
 private:
     OrderBook& get_or_create_book(const std::string& symbol);
 
+    // Starts a call on the book: reads the clock once and builds reports only if someone receives them
+    void begin_call(OrderBook& book, const std::vector<ExecReport>* reports) {
+        book.begin_call(clock_->now_ns(), reports != nullptr || static_cast<bool>(exec_report_callback_));
+    }
+
+    // The per-call report buffer, reused across calls to avoid an allocation per call. Taking it leaves
+    // the member empty, so a call made from inside a callback gets a buffer of its own.
+    class ReportBuffer {
+    public:
+        explicit ReportBuffer(std::vector<ExecReport>& home) : home_(home) { reports.swap(home_); }
+        ~ReportBuffer() {
+            reports.clear();
+            home_.swap(reports);
+        }
+        ReportBuffer(const ReportBuffer&) = delete;
+        ReportBuffer& operator=(const ReportBuffer&) = delete;
+        std::vector<ExecReport> reports;
+
+    private:
+        std::vector<ExecReport>& home_;
+    };
+
     // The symbol's book, or nullptr (read-only queries must not create books: 1.0 defect D18)
     OrderBook* find_book(const std::string& symbol);
 
@@ -113,6 +135,8 @@ private:
     EngineOptions options_;
     mutable std::recursive_mutex mutex_;
     std::unordered_map<std::string, std::unique_ptr<OrderBook>> books_;
+    OrderBook* last_book_ = nullptr;  // the most recently used book, checked before hashing the symbol
+    std::vector<ExecReport> report_buffer_;
     std::unordered_map<std::string, SymbolSpec> specs_;
     FeeBook fees_;
 

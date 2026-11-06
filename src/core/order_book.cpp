@@ -3,12 +3,17 @@
 
 OrderBook::OrderBook(std::string symbol, const IClock& clock, uint64_t& trade_id_seq, uint64_t& report_seq,
                      const FeeBook& fees)
-    : symbol_(std::move(symbol)), clock_(clock), trade_id_seq_(trade_id_seq), report_seq_(report_seq), fees_(fees) {}
+    : symbol_(std::move(symbol)), now_(clock.now_ns()), trade_id_seq_(trade_id_seq), report_seq_(report_seq),
+      fees_(fees) {}
 
 ExecReport& OrderBook::report(std::vector<ExecReport>& reports, ExecType type, const Order& order, ExecReason reason) {
+    ++report_seq_;
+    if (!reporting_) {
+        return discarded_;
+    }
     ExecReport r;
-    r.seq = ++report_seq_;
-    r.timestamp = clock_.now_ns();
+    r.seq = report_seq_;
+    r.timestamp = now_;
     r.type = type;
     r.reason = reason;
     r.order_id = order.order_id;
@@ -25,23 +30,28 @@ ExecReport& OrderBook::report(std::vector<ExecReport>& reports, ExecType type, c
     return reports.back();
 }
 
-std::vector<Trade> OrderBook::submit_order(std::shared_ptr<Order> order, std::vector<ExecReport>& reports) {
+std::vector<Trade> OrderBook::submit_order(const std::shared_ptr<Order>& order, std::vector<ExecReport>& reports) {
+    if (orders_lookup_.count(order->order_id)) {
+        // Rejected without touching `order`: it may be the very object that is resting (and linked)
+        Order rejected = *order;
+        rejected.filled_quantity = 0;
+        rejected.fees_paid = 0;
+        report(reports, ExecType::REJECTED, rejected, ExecReason::DUPLICATE_ORDER_ID).text =
+            "Duplicate order_id '" + order->order_id + "': an order with this ID is resting (use replace)";
+        return {};
+    }
     order->filled_quantity = 0;
     order->fees_paid = 0;
     return submit_internal(order, reports, ExecType::ACK);
 }
 
-std::vector<Trade> OrderBook::submit_internal(std::shared_ptr<Order> order, std::vector<ExecReport>& reports,
+std::vector<Trade> OrderBook::submit_internal(const std::shared_ptr<Order>& order, std::vector<ExecReport>& reports,
                                               ExecType first_report) {
+    // A new order (submit_order checked the ID) or a modified one that was just unlinked: never queued
     order->remaining_quantity = order->quantity - order->filled_quantity;
     order->is_cancelled = false;
-    order->has_iterator = false;
+    order->queued = false;
 
-    if (orders_lookup_.find(order->order_id) != orders_lookup_.end()) {
-        report(reports, ExecType::REJECTED, *order, ExecReason::DUPLICATE_ORDER_ID).text =
-            "Duplicate order_id '" + order->order_id + "': an order with this ID is resting (use replace)";
-        return {};
-    }
     // New orders are validated here; a modify validates its new price and quantity before re-submitting
     if (first_report == ExecType::ACK) {
         if (auto error = validate_order(*order, spec())) {
@@ -62,7 +72,7 @@ std::vector<Trade> OrderBook::submit_internal(std::shared_ptr<Order> order, std:
 
     switch (order->order_type) {
         case OrderType::LIMIT:
-            trades = match_against_book(order, true, taker_cancelled, reports);
+            trades = match_against_book(*order, true, taker_cancelled, reports);
             if (order->remaining_quantity > 0 && !taker_cancelled) {
                 // A remainder that still crosses the book only arises when self-trade prevention skipped
                 // resting orders; resting it would cross the book (1.0 defect D7), so it is cancelled instead
@@ -74,11 +84,11 @@ std::vector<Trade> OrderBook::submit_internal(std::shared_ptr<Order> order, std:
             }
             break;
         case OrderType::MARKET:
-            trades = match_against_book(order, false, taker_cancelled, reports);
+            trades = match_against_book(*order, false, taker_cancelled, reports);
             unfilled = ExecReason::NO_LIQUIDITY;
             break;
         case OrderType::IOC:
-            trades = match_against_book(order, true, taker_cancelled, reports);
+            trades = match_against_book(*order, true, taker_cancelled, reports);
             unfilled = ExecReason::IOC_REMAINDER;
             break;
         case OrderType::LIMIT_MAKER:
@@ -92,8 +102,8 @@ std::vector<Trade> OrderBook::submit_internal(std::shared_ptr<Order> order, std:
         case OrderType::FOK:
             // All or nothing. The dry run applies the same self-trade rules as the sweep, so a confirmed
             // FOK fills completely; it never rests (1.0 defect D21)
-            if (can_fok_be_fully_filled(order)) {
-                trades = match_against_book(order, true, taker_cancelled, reports);
+            if (can_fok_be_fully_filled(*order)) {
+                trades = match_against_book(*order, true, taker_cancelled, reports);
             }
             unfilled = ExecReason::FOK_KILL;
             break;
@@ -125,7 +135,7 @@ std::string OrderBook::post_only_text(const Order& order) const {
            " would trade immediately against the best " + (order.side == Side::BUY ? "ask" : "bid");
 }
 
-std::vector<Trade> OrderBook::replace_order(std::shared_ptr<Order> order, std::vector<ExecReport>& reports) {
+std::vector<Trade> OrderBook::replace_order(const std::shared_ptr<Order>& order, std::vector<ExecReport>& reports) {
     if (auto old = erase_order(order->order_id)) {
         report(reports, ExecType::CANCELLED, *old, ExecReason::REPLACED);
     }
@@ -138,10 +148,10 @@ std::shared_ptr<Order> OrderBook::erase_order(const std::string& order_id) {
         return nullptr;
     }
 
-    auto order = it->second;
-    order->is_cancelled = true;
-    remove_order_from_book(order);
+    auto order = std::move(it->second);
     orders_lookup_.erase(it);
+    order->is_cancelled = true;
+    remove_order_from_book(*order);
     return order;
 }
 
@@ -220,7 +230,7 @@ bool OrderBook::modify_order(const std::string& order_id, Quantity new_qty, Pric
     new_order->filled_quantity = order->filled_quantity;
     new_order->fees_paid = order->fees_paid;
     new_order->quantity = order->filled_quantity + new_qty;
-    new_order->timestamp = clock_.now_ns();
+    new_order->timestamp = now_;
     new_order->owner_id = order->owner_id;
     new_order->stp_policy = order->stp_policy;
     new_order->market_data_liquidity = order->market_data_liquidity;
@@ -231,7 +241,7 @@ bool OrderBook::modify_order(const std::string& order_id, Quantity new_qty, Pric
 
 Bbo OrderBook::bbo() const {
     Bbo b;
-    b.timestamp = clock_.now_ns();
+    b.timestamp = now_;
     if (!bids_.empty()) {
         b.bid_price = bids_.begin()->first;
         b.bid_qty = bids_.begin()->second.total_quantity;
@@ -245,7 +255,7 @@ Bbo OrderBook::bbo() const {
 
 Depth OrderBook::depth(int levels) const {
     Depth d;
-    d.timestamp = clock_.now_ns();
+    d.timestamp = now_;
     auto copy_side = [levels](const auto& book_side, std::vector<DepthLevel>& out) {
         out.reserve(static_cast<size_t>(std::max(0, std::min<int>(levels, static_cast<int>(book_side.size())))));
         for (const auto& [price, level] : book_side) {
@@ -275,32 +285,31 @@ bool is_self_trade(const Order& taker, const Order& maker) {
 } // namespace
 
 template <typename BookSide>
-void OrderBook::sweep(BookSide& book_side, const std::shared_ptr<Order>& order, bool enforce_limit,
+void OrderBook::sweep(BookSide& book_side, Order& order, bool enforce_limit,
                       std::vector<Trade>& trades, bool& taker_cancelled, std::vector<ExecReport>& reports) {
     auto level_it = book_side.begin();
-    while (level_it != book_side.end() && order->remaining_quantity > 0 && !taker_cancelled) {
-        if (enforce_limit && !crosses(*order, level_it->first)) {
+    while (level_it != book_side.end() && order.remaining_quantity > 0 && !taker_cancelled) {
+        if (enforce_limit && !crosses(order, level_it->first)) {
             break;
         }
 
         PriceLevel& level = level_it->second;
-        auto order_it = level.orders.begin();
-        while (order_it != level.orders.end() && order->remaining_quantity > 0) {
-            auto maker_order = *order_it;
-            if (is_self_trade(*order, *maker_order)) {
-                StpPolicy policy = order->stp_policy;
+        Order* next = level.head;
+        while (next && order.remaining_quantity > 0) {
+            // The lookup owns the maker: release_maker() (which may destroy it) is always its last use
+            Order& maker = *next;
+            next = maker.queue_next;
+            if (is_self_trade(order, maker)) {
+                StpPolicy policy = order.stp_policy;
                 if (policy == StpPolicy::SKIP) {
-                    ++order_it;
                     continue;
                 }
                 if (policy == StpPolicy::CANCEL_MAKER || policy == StpPolicy::CANCEL_BOTH) {
                     // Remove the own resting order in place (the level itself is handled below)
-                    level.total_quantity -= maker_order->remaining_quantity;
-                    maker_order->is_cancelled = true;
-                    maker_order->has_iterator = false;
-                    orders_lookup_.erase(maker_order->order_id);
-                    order_it = level.orders.erase(order_it);
-                    report(reports, ExecType::CANCELLED, *maker_order, ExecReason::STP_MAKER);
+                    level.total_quantity -= maker.remaining_quantity;
+                    maker.is_cancelled = true;
+                    report(reports, ExecType::CANCELLED, maker, ExecReason::STP_MAKER);
+                    release_maker(level, maker);
                 }
                 if (policy == StpPolicy::CANCEL_TAKER || policy == StpPolicy::CANCEL_BOTH) {
                     taker_cancelled = true;
@@ -309,55 +318,55 @@ void OrderBook::sweep(BookSide& book_side, const std::shared_ptr<Order>& order, 
                 continue;
             }
 
-            Quantity match_qty = std::min(order->remaining_quantity, maker_order->remaining_quantity);
+            Quantity match_qty = std::min(order.remaining_quantity, maker.remaining_quantity);
             uint64_t trade_id = ++trade_id_seq_;
 
+            if (trades.empty()) {
+                trades.reserve(4);  // a sweep often fills several makers; avoids regrowing (and copying) trades
+            }
             trades.push_back(Trade{
                 std::to_string(trade_id),
                 symbol_,
-                maker_order->price,
+                maker.price,
                 match_qty,
-                order->side,
-                maker_order->order_id,
-                order->order_id,
-                clock_.now_ns()
+                order.side,
+                maker.order_id,
+                order.order_id,
+                now_
             });
 
-            maker_order->remaining_quantity -= match_qty;
-            maker_order->filled_quantity += match_qty;
-            order->remaining_quantity -= match_qty;
-            order->filled_quantity += match_qty;
+            maker.remaining_quantity -= match_qty;
+            maker.filled_quantity += match_qty;
+            order.remaining_quantity -= match_qty;
+            order.filled_quantity += match_qty;
             level.total_quantity -= match_qty;
 
-            for (const auto& [filled, liquidity] : {std::make_pair(order, Liquidity::TAKER),
-                                                    std::make_pair(maker_order, Liquidity::MAKER)}) {
+            for (const auto& [filled, liquidity] : {std::pair<Order*, Liquidity>{&order, Liquidity::TAKER},
+                                                    std::pair<Order*, Liquidity>{&maker, Liquidity::MAKER}}) {
                 // Market-data liquidity is not a participant and pays nothing
                 int64_t fee = 0;
                 if (!filled->market_data_liquidity) {
                     const FeeSchedule& schedule = fees_.schedule_for(filled->owner_id);
-                    fee = fee_for(maker_order->price, match_qty,
+                    fee = fee_for(maker.price, match_qty,
                                   liquidity == Liquidity::TAKER ? schedule.taker_rate : schedule.maker_rate);
                 }
                 filled->fees_paid += fee;
                 ExecReport& fill = report(reports, ExecType::FILL, *filled);
                 fill.fee = fee;
-                fill.last_px = maker_order->price;
+                fill.last_px = maker.price;
                 fill.last_qty = match_qty;
                 fill.liquidity = liquidity;
                 fill.trade_id = trades.back().trade_id;
             }
 
-            if (maker_order->remaining_quantity <= 0) {
-                orders_lookup_.erase(maker_order->order_id);
-                order_it = level.orders.erase(order_it);
-            } else {
-                ++order_it;
+            if (maker.remaining_quantity <= 0) {
+                release_maker(level, maker);
             }
         }
 
         // A level that still holds orders here either filled the taker or holds only skipped own
         // orders; in the second case matching continues at the next level
-        if (level.orders.empty()) {
+        if (level.empty()) {
             level_it = book_side.erase(level_it);
         } else {
             ++level_it;
@@ -365,10 +374,10 @@ void OrderBook::sweep(BookSide& book_side, const std::shared_ptr<Order>& order, 
     }
 }
 
-std::vector<Trade> OrderBook::match_against_book(std::shared_ptr<Order> order, bool enforce_limit,
+std::vector<Trade> OrderBook::match_against_book(Order& order, bool enforce_limit,
                                                  bool& taker_cancelled, std::vector<ExecReport>& reports) {
     std::vector<Trade> trades;
-    if (order->side == Side::BUY) {
+    if (order.side == Side::BUY) {
         sweep(asks_, order, enforce_limit, trades, taker_cancelled, reports);
     } else {
         sweep(bids_, order, enforce_limit, trades, taker_cancelled, reports);
@@ -392,7 +401,7 @@ bool OrderBook::has_fillable_liquidity(const BookSide& book_side, const Order& o
         if (!crosses(order, price)) {
             break;
         }
-        for (const auto& resting_order : level.orders) {
+        for (const Order* resting_order = level.head; resting_order; resting_order = resting_order->queue_next) {
             if (is_self_trade(order, *resting_order)) {
                 if (order.stp_policy == StpPolicy::CANCEL_TAKER || order.stp_policy == StpPolicy::CANCEL_BOTH) {
                     return false;
@@ -408,62 +417,48 @@ bool OrderBook::has_fillable_liquidity(const BookSide& book_side, const Order& o
     return false;
 }
 
-bool OrderBook::can_fok_be_fully_filled(std::shared_ptr<Order> order) const {
-    if (order->side == Side::BUY) {
-        return has_fillable_liquidity(asks_, *order);
+bool OrderBook::can_fok_be_fully_filled(const Order& order) const {
+    if (order.side == Side::BUY) {
+        return has_fillable_liquidity(asks_, order);
     }
-    return has_fillable_liquidity(bids_, *order);
+    return has_fillable_liquidity(bids_, order);
 }
 
-void OrderBook::add_resting_order(std::shared_ptr<Order> order) {
+void OrderBook::add_resting_order(const std::shared_ptr<Order>& order) {
     orders_lookup_[order->order_id] = order;
 
-    if (order->side == Side::BUY) {
-        PriceLevel& level = bids_[order->price];
-        level.price = order->price;
-        level.total_quantity += order->remaining_quantity;
-        
-        level.orders.push_back(order);
-        order->list_it = std::prev(level.orders.end());
-        order->has_iterator = true;
-    } else {
-        PriceLevel& level = asks_[order->price];
-        level.price = order->price;
-        level.total_quantity += order->remaining_quantity;
-
-        level.orders.push_back(order);
-        order->list_it = std::prev(level.orders.end());
-        order->has_iterator = true;
-    }
+    PriceLevel& level = order->side == Side::BUY ? bids_[order->price] : asks_[order->price];
+    level.price = order->price;
+    level.total_quantity += order->remaining_quantity;
+    level.push_back(*order);
 }
 
-void OrderBook::remove_order_from_book(std::shared_ptr<Order> order) {
-    if (!order->has_iterator) return;
+void OrderBook::release_maker(PriceLevel& level, Order& maker) {
+    level.unlink(maker);
+    // Last use of `maker`: erasing the lookup entry may destroy it
+    orders_lookup_.erase(orders_lookup_.find(maker.order_id));
+}
 
-    if (order->side == Side::BUY) {
-        auto price_it = bids_.find(order->price);
-        if (price_it != bids_.end()) {
+void OrderBook::remove_order_from_book(Order& order) {
+    // The caller holds a reference to the order, so it outlives the unlink
+    if (!order.queued) return;
+
+    auto unlink_from = [&order](auto& book_side) {
+        auto price_it = book_side.find(order.price);
+        if (price_it != book_side.end()) {
             PriceLevel& level = price_it->second;
-            level.total_quantity -= order->remaining_quantity;
-            level.orders.erase(order->list_it);
-            
-            if (level.orders.empty()) {
-                bids_.erase(price_it);
+            level.total_quantity -= order.remaining_quantity;
+            level.unlink(order);
+            if (level.empty()) {
+                book_side.erase(price_it);
             }
         }
+    };
+    if (order.side == Side::BUY) {
+        unlink_from(bids_);
     } else {
-        auto price_it = asks_.find(order->price);
-        if (price_it != asks_.end()) {
-            PriceLevel& level = price_it->second;
-            level.total_quantity -= order->remaining_quantity;
-            level.orders.erase(order->list_it);
-
-            if (level.orders.empty()) {
-                asks_.erase(price_it);
-            }
-        }
+        unlink_from(asks_);
     }
-    order->has_iterator = false;
 }
 
 template <typename BookSide>
@@ -472,7 +467,7 @@ void OrderBook::check_side(const BookSide& book_side, Side side, std::vector<std
     const std::string side_name = sideToString(side);
     for (const auto& [price, level] : book_side) {
         const std::string where = side_name + " level " + format_fixed(price);
-        if (level.orders.empty()) {
+        if (level.empty()) {
             violations.push_back(where + ": empty level was not erased");
         }
         if (level.price != price) {
@@ -480,10 +475,13 @@ void OrderBook::check_side(const BookSide& book_side, Side side, std::vector<std
         }
 
         Quantity sum = 0;
-        for (auto it = level.orders.begin(); it != level.orders.end(); ++it) {
-            const auto& order = *it;
+        size_t count = 0;
+        const Order* prev = nullptr;
+        // Bounded by the lookup size, so a corrupted (cyclic) queue can't loop forever
+        for (const Order* order = level.head; order && count <= orders_lookup_.size(); order = order->queue_next) {
             const std::string who = where + ", order " + order->order_id;
             ++resting_orders;
+            ++count;
             sum += order->remaining_quantity;
 
             if (order->side != side) {
@@ -498,13 +496,21 @@ void OrderBook::check_side(const BookSide& book_side, Side side, std::vector<std
             if (order->is_cancelled) {
                 violations.push_back(who + ": cancelled order still queued");
             }
-            if (!order->has_iterator || order->list_it != it) {
-                violations.push_back(who + ": list back-pointer does not point at its queue position");
+            if (!order->queued || order->queue_prev != prev) {
+                violations.push_back(who + ": queue links are inconsistent");
             }
             auto found = orders_lookup_.find(order->order_id);
-            if (found == orders_lookup_.end() || found->second != order) {
+            if (found == orders_lookup_.end() || found->second.get() != order) {
                 violations.push_back(who + ": missing from the order lookup");
             }
+            prev = order;
+        }
+        if (level.tail != prev) {
+            violations.push_back(where + ": tail is not the last queued order");
+        }
+        if (level.count != count) {
+            violations.push_back(where + ": count " + std::to_string(level.count) + " != " + std::to_string(count) +
+                                 " queued orders");
         }
 
         if (sum != level.total_quantity) {

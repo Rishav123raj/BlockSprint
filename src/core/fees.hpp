@@ -40,6 +40,9 @@ public:
 
     // The schedule that applies to the owner's fills
     const FeeSchedule& schedule_for(const std::string& owner) const {
+        if (by_owner_.empty()) {
+            return default_;  // skips hashing the owner on every fill
+        }
         auto it = by_owner_.find(owner);
         return it == by_owner_.end() ? default_ : it->second;
     }

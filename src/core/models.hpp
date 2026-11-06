@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-#include <list>
 #include <memory>
 #include <sstream>
 #include <iomanip>
@@ -113,10 +112,11 @@ struct Order {
     // minimum notional, for example. The basic checks (positive quantity and price) still apply.
     bool market_data_liquidity = false;
 
-    // Iterator pointing to the position of this order in its PriceLevel's std::list.
-    // This allows O(1) removals.
-    std::list<std::shared_ptr<Order>>::iterator list_it;
-    bool has_iterator = false;
+    // Links in its price level's FIFO queue (P1.18: the queue is intrusive, so resting an order allocates
+    // no list node). Valid only while `queued`; the book's order lookup owns a queued order.
+    Order* queue_prev = nullptr;
+    Order* queue_next = nullptr;
+    bool queued = false;
 };
 
 struct Trade {

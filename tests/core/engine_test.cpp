@@ -131,4 +131,30 @@ TEST_CASE("a thread-safe engine stays consistent under concurrent use") {
     CHECK(trades[0].trade_id == std::to_string(expected + 1));
 }
 
+TEST_CASE("resubmitting the resting order object itself is rejected and leaves it intact") {
+    // The book links resting orders through the Order objects (P1.18), so a duplicate must be rejected
+    // before anything about the object is touched
+    MatchingEngine eng;
+    auto resting = make_order("R", "DUP", OrderType::LIMIT, Side::BUY, 100.0, 2.0);
+    eng.submit_order(resting);
+    eng.submit_order(make_order("S", "DUP", OrderType::LIMIT, Side::SELL, 100.0, 0.5));  // partly fills R
+
+    std::vector<ExecReport> reports;
+    CHECK(eng.submit_order(resting, &reports).empty());
+    REQUIRE(reports.size() == 1U);
+    CHECK(reports[0].reason == ExecReason::DUPLICATE_ORDER_ID);
+    CHECK(reports[0].cum_qty == 0);  // reported as the new submission it was
+    CHECK(resting->filled_quantity == fx(0.5));
+    CHECK(resting->remaining_quantity == fx(1.5));
+    CHECK(eng.check_invariants("DUP").empty());
+
+    // Still fully functional: it trades and cancels normally
+    auto trades = eng.submit_order(make_order("T", "DUP", OrderType::MARKET, Side::SELL, 0.0, 1.0));
+    REQUIRE(trades.size() == 1U);
+    CHECK(trades[0].maker_order_id == "R");
+    CHECK(eng.cancel_order("DUP", "R"));
+    CHECK(eng.check_invariants("DUP").empty());
+    CHECK(eng.depth("DUP").bids.empty());
+}
+
 } // TEST_SUITE("engine")
