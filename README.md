@@ -244,20 +244,31 @@ BlockSprint/
 ├── src/                        # C++ Matching Engine Codebase
 │   ├── core/                   # engine_core library (no networking)
 │   │   ├── types.hpp/.cpp      # Fixed-point prices/quantities (1e-8 units), exact decimal parsing
+│   │   ├── int128.hpp          # 128-bit helpers for exact notional and fee math
 │   │   ├── clock.hpp           # IClock, WallClock (live), SimClock (replay)
-│   │   ├── models.hpp          # Order and trade structs with json serializers
-│   │   ├── order_book.hpp/.cpp # Core order book queues and matching algorithms
-│   │   └── matching_engine.hpp/.cpp # Thread-safe manager & cross-symbol registry
+│   │   ├── models.hpp          # Order, Trade, order types, STP policies
+│   │   ├── events.hpp          # Execution reports
+│   │   ├── market_data.hpp     # Plain BBO / depth snapshots and their JSON
+│   │   ├── symbol_spec.hpp/.cpp # Per-symbol trading rules and order validation
+│   │   ├── fees.hpp/.cpp       # Maker/taker fee schedules and exact fee math
+│   │   ├── order_book.hpp/.cpp # Price-time order book: matching, STP, amend, intrusive queues
+│   │   └── matching_engine.hpp/.cpp # Instantiable engine: books per symbol, clock, callbacks
 │   ├── api/
 │   │   └── api_server.hpp/.cpp # HTTP REST and WebSocket router endpoints
 │   ├── logger.hpp              # Thread-safe file logger (levels, per-run files)
 │   └── main.cpp                # Application startup and OS signal handling
 │
-├── tests/core/                 # doctest unit tests (unit_tests target)
+├── tests/core/                 # doctest unit tests (unit_tests target), see explanations/tests.md
 │   ├── matching_test.cpp       # The six original 1.0 unit tests
 │   ├── characterization_test.cpp # Pins exact 1.0 matching behavior for the 2.0 refactors
-│   ├── test_helpers.hpp        # Order builders and engine reset fixture
+│   ├── *_test.cpp              # Invariants, STP, reports, validation, fees, post-only/amend, logger
+│   ├── fuzz_test.cpp           # Engine vs a naive reference book, every report compared
+│   ├── determinism_test.cpp    # Pinned cross-platform hash of the full output stream
+│   ├── test_helpers.hpp        # Order builders and engine fixture
+│   ├── workload.hpp            # Seeded random workload and golden hashes
 │   └── test_main.cpp           # doctest entry point
+│
+├── bench/bench_core.cpp        # Engine throughput benchmark (docs/baseline/bench_core.md)
 │
 ├── research/data/              # 2.0 market-data recorder, raw archive I/O, quality inspector
 │                               #   (see docs/recorder_ops.md)
@@ -270,12 +281,19 @@ BlockSprint/
 │   └── client_demo.py          # REST & WebSocket subscription integration test script
 │
 ├── explanations/               # Detailed codebase documentation
-│   ├── models.md               # Explanation of models and data formats
-│   ├── logger.md               # Details about the logging framework
-│   ├── order_book.md           # OrderBook logic and double-linked order traversal
-│   ├── matching_engine.md      # Engine registry and cross-symbol routing
-│   ├── api_server.md           # API server, HTTP routing, and WS event emitters
-│   └── main.md                 # Entry point flow explanation
+│   ├── types.md                # Fixed-point prices and quantities
+│   ├── clock.md                # Wall clock vs simulated clock
+│   ├── models.md               # Orders, trades, order types, STP policies
+│   ├── events.md               # Execution reports and their contract
+│   ├── market_data.md          # BBO / depth snapshots
+│   ├── symbol_spec.md          # Trading rules and validation
+│   ├── fees.md                 # Fee schedules and fee math
+│   ├── order_book.md           # Matching, STP, amend, data structures
+│   ├── matching_engine.md      # The engine: books, clock, callbacks, hot path
+│   ├── api_server.md           # REST and WebSocket API
+│   ├── logger.md               # Logging
+│   ├── main.md                 # Server entry point and command line
+│   └── tests.md                # Test suites, fuzz, determinism, benchmark
 │
 ├── external/                   # Locally cached header-only dependencies
 │   ├── nlohmann/               # json.hpp library

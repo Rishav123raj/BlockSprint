@@ -19,18 +19,20 @@ This component implements the networking layer, hosting the HTTP REST endpoints 
    - `POST /api/fees` (**localhost only**, P1.13): sets a fee schedule, `{"owner": "alice", "maker_rate": "0.0002", "taker_rate": "0.0004"}`. Rates are decimal fractions (`"0.001"` = 0.10%); a negative rate is a rebate. Without `owner` it sets the default for everyone. The server starts with Binance's regular tier, 0.10% / 0.10%.
    - `GET /api/fees?owner=alice`: the schedule that applies to that owner (`"source"`: `owner` or `default`).
    - `POST /api/reset`: clears all books (trading rules and fee schedules are kept).
-2. **Order rules (P1.12):** every order needs a positive quantity, and LIMIT/IOC/FOK need a positive price. A missing price used to become 0, which made a sell sweep every bid (1.0 defect D6). Symbols with trading rules also check tick size, lot size, the quantity range and the minimum notional (limit price × quantity). Orders from the reserved owner `MARKET` (mirrored Binance levels, accepted only from localhost) are exempt from the symbol rules: real books contain levels below the minimum notional.
+2. **Order rules (P1.12):** every order needs a positive quantity, and every type but `market` needs a positive price. A missing price used to become 0, which made a sell sweep every bid (1.0 defect D6). Symbols with trading rules also check tick size, lot size, the quantity range and the minimum notional (limit price × quantity). Orders from the reserved owner `MARKET` (mirrored Binance levels, accepted only from localhost) are exempt from the symbol rules: real books contain levels below the minimum notional.
 3. **Handles WebSocket Clients**:
    - Manages WebSocket endpoints based on the connection resource path:
      - `/ws/market-data`: BBO updates on every change, and depth updates coalesced per symbol to at most one every 100 ms (P1.11).
      - `/ws/trades`: trade events.
      - `/ws/orders`: submit (`"action": "submit"`), replace (`"replace"`), amend (`"amend"`, same fields as `PATCH`) or cancel (`"cancel"`) orders. Responses carry `reports`; errors echo the `order_id`.
      - `/ws/executions`: every execution report (P1.10).
-3. **CORS Options**: Implements `OPTIONS` pre-flight headers, enabling cross-origin browser testing.
-4. **Subscriber Management**: Uses `std::set` to track active connection handles (`websocketpp::connection_hdl`). Separate sets are kept for `/ws/market-data`, `/ws/trades`, and `/ws/orders`.
-5. **Broadcasting**:
-   - Broadcasts JSON events to clients using `server_.send(hdl, payload)`.
-   - Protects the connection sets using a `std::mutex` to ensure thread-safe insertion/removal when clients open or close connections concurrently.
+4. **CORS Options**: Implements `OPTIONS` pre-flight headers (methods `POST, PUT, PATCH, GET, DELETE, OPTIONS`), enabling cross-origin browser testing.
+5. **Subscriber Management**: Uses `std::set` to track active connection handles (`websocketpp::connection_hdl`). Separate sets are kept for `/ws/market-data`, `/ws/trades`, `/ws/orders` and `/ws/executions`, guarded by one `std::mutex`.
+6. **Broadcasting** (P1.11):
+   - The engine's callbacks pass plain structs (`Bbo`, `Depth`, `Trade`, `ExecReport`). JSON is built only if the matching set has subscribers.
+   - Depth is coalesced: the latest `Depth` per symbol is kept in `pending_depth_` and an `asio::steady_timer` sends it at most every `depth_interval_ms` (100 ms by default, the constructor's second argument).
+   - Events go out with `server_.send(hdl, payload)`.
+7. **Localhost-only operations:** `POST /api/symbols` and `POST /api/fees` are accepted only from loopback addresses (IPv4-mapped IPv6 included); others get `403`. An order with the reserved owner `MARKET` from anywhere else is refused with `400`.
 
 ---
 
@@ -60,10 +62,12 @@ graph TD
         M_CONN["market_data_conns_ std::set"]
         T_CONN["trades_conns_ std::set"]
         O_CONN["orders_conns_ std::set"]
+        E_CONN["executions_conns_ std::set"]
+        DEPTH["pending_depth_ + 100 ms steady_timer"]
     end
 
-    subgraph Matching Engine Manager
-        MEM[MatchingEngineManager]
+    subgraph Engine
+        MEM[MatchingEngine]
     end
 
     RC1 -->|POST /api/orders| HTTP_HDL
@@ -78,12 +82,18 @@ graph TD
     WS_OPEN -->|Save Handle| T_CONN
     WS_OPEN -->|Save Handle| O_CONN
     
-    WSC3 -->|Submit/Cancel JSON| WS_MSG
+    WSC3 -->|submit / replace / amend / cancel JSON| WS_MSG
     WS_MSG -->|Submit/Cancel| MEM
     
     WS_CLOSE -->|Erase Handles| M_CONN
     WS_CLOSE -->|Erase Handles| T_CONN
     WS_CLOSE -->|Erase Handles| O_CONN
+
+    MEM -->|Bbo / Trade / ExecReport callbacks| M_CONN
+    MEM -->|Trade| T_CONN
+    MEM -->|ExecReport| E_CONN
+    MEM -->|Depth| DEPTH
+    DEPTH -->|latest per symbol| M_CONN
 ```
 
 ---

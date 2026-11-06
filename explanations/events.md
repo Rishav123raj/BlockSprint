@@ -5,13 +5,14 @@ Execution reports describe the complete lifecycle of every order, in the order t
 ## The contract
 
 * An order the engine refuses gets exactly **one `REJECTED`** report and nothing else.
-* An accepted order gets **`ACK`** first (`AMENDED` if `modify` re-submitted it), then any number of `FILL` / `AMENDED` reports, then **exactly one terminal report**: a `FILL` with `leaves_qty == 0`, or a `CANCELLED`.
+* An accepted order gets **`ACK`** first, then any number of `FILL` / `AMENDED` reports, then **exactly one terminal report**: a `FILL` with `leaves_qty == 0`, or a `CANCELLED`.
 * An order with no terminal report is resting in the book.
 * Every trade produces **two `FILL`s** with the same `trade_id`: the taker's, then the maker's.
-* `seq` numbers are consecutive per engine, across all symbols; timestamps come from the engine's clock (`SimClock` in a backtest).
+* `seq` numbers are consecutive per engine, across all symbols; timestamps come from the engine's clock (`SimClock` in a backtest), read once per call, so all reports of one call share a timestamp.
+* Reports are built only when something receives them (an exec-report callback or a `reports` vector). Sequence numbers advance either way, so a run's numbering doesn't depend on who listens.
 * At every report, `cum_qty + leaves_qty == quantity`, except terminal `CANCELLED` and `REJECTED` reports, where `leaves_qty` is 0.
 
-`tests/core/exec_report_test.cpp` checks all of this on every report of 20 random workloads that use every STP policy. At the end of each run, the orders without a terminal report must be **exactly** the ones still resting.
+`tests/core/exec_report_test.cpp` checks all of this on every report of 20 random workloads that use every STP policy. At the end of each run, the orders without a terminal report must be **exactly** the ones still resting. The fuzz test compares every field of every report with a reference book, and the determinism test pins the whole stream ([tests.md](tests.md)).
 
 ## Types and reasons
 
@@ -20,7 +21,7 @@ Execution reports describe the complete lifecycle of every order, in the order t
 | `ack` | — | Order accepted |
 | `fill` | — | Partial or complete fill: `last_px`, `last_qty`, `liquidity` (`maker`/`taker`), `trade_id`, `fee` |
 | `amended` | — | Price or quantity changed by `amend` or `modify` |
-| `cancelled` | `user` | Cancel request, or modify to zero quantity |
+| `cancelled` | `user` | Cancel request, modify to zero quantity, or amend to a total at or below the filled quantity |
 | | `replaced` | Replaced by a new order with the same ID (`replace_order`) |
 | | `ioc_remainder` | Unfilled part of an IOC |
 | | `no_liquidity` | Unfilled part of a MARKET order |
