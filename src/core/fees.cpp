@@ -12,6 +12,14 @@ uint64_t to_u64_saturated(const int128::U128& v) {
 
 } // namespace
 
+int64_t notional_for(Price price, Quantity quantity) {
+    if (price <= 0 || quantity <= 0) {
+        return 0;
+    }
+    return static_cast<int64_t>(to_u64_saturated(int128::div_round(
+        int128::mul(static_cast<uint64_t>(price), static_cast<uint64_t>(quantity)), static_cast<uint32_t>(kFixedScale))));
+}
+
 int64_t fee_for(Price price, Quantity quantity, int64_t rate) {
     if (rate == 0 || price <= 0 || quantity <= 0) {
         return 0;

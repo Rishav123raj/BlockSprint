@@ -10,6 +10,10 @@
 struct EngineOptions {
     // Guard every call with a mutex (live server). A single-threaded simulation turns this off.
     bool thread_safe = true;
+    // Build execution reports for market-data liquidity (synthetic orders, P3.6). A simulation turns this
+    // off: its reports are routed to strategies only, and building the synthetic ones would cost more than
+    // the matching. A strategy's report for a fill against synthetic liquidity is still built.
+    bool report_market_data_liquidity = true;
 };
 
 // Routes orders to per-symbol order books. Each instance is fully independent: its own books,

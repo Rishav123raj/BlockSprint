@@ -37,7 +37,10 @@ enum class ExecReason {
     QUANTITY_LOT,        // quantity is not a multiple of the symbol's lot size
     QUANTITY_RANGE,      // quantity is below the symbol's minimum or above its maximum
     MIN_NOTIONAL,        // price x quantity is below the symbol's minimum notional
-    POST_ONLY_WOULD_TAKE // LIMIT_MAKER order (or amend) that would trade on arrival instead of resting
+    POST_ONLY_WOULD_TAKE, // LIMIT_MAKER order (or amend) that would trade on arrival instead of resting
+    // REJECTED by the simulator's gateway (P3.10), before the engine
+    RATE_LIMIT,          // too many orders in the window (Binance: orders per 10 s / per day)
+    MAX_OPEN_ORDERS      // the participant already has the maximum number of open orders on the symbol
 };
 
 enum class Liquidity { NONE, MAKER, TAKER };
@@ -98,6 +101,8 @@ inline std::string execReasonToString(ExecReason reason) {
         case ExecReason::QUANTITY_RANGE: return "quantity_range";
         case ExecReason::MIN_NOTIONAL: return "min_notional";
         case ExecReason::POST_ONLY_WOULD_TAKE: return "post_only_would_take";
+        case ExecReason::RATE_LIMIT: return "rate_limit";
+        case ExecReason::MAX_OPEN_ORDERS: return "max_open_orders";
     }
     return "unknown";
 }

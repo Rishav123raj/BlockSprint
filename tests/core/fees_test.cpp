@@ -49,6 +49,37 @@ TEST_CASE("fee_for does not overflow on extreme values") {
     CHECK(fee_for(max, max, -rate(1.0)) == -max);
 }
 
+TEST_CASE("notional_for: exact on realistic fills, rounded half away from zero, saturating") {
+    CHECK(notional_for(fx(77000.01), fx(0.001)) == fx(77.00001));
+    CHECK(notional_for(fx(2292.48), fx(2.5)) == fx(5731.2));
+    CHECK(notional_for(fx(1.5), 1) == 2);   // 1.5e-8 -> 2e-8
+    CHECK(notional_for(fx(1.4), 1) == 1);
+    CHECK(notional_for(0, fx(1.0)) == 0);
+    const int64_t max = std::numeric_limits<int64_t>::max();
+    CHECK(notional_for(max, max) == max);
+}
+
+TEST_CASE("report_market_data_liquidity = false: no reports for synthetic orders, the participant's still built") {
+    MatchingEngine eng(std::make_shared<SimClock>(5), EngineOptions{false, false});
+    std::vector<ExecReport> seen;
+    eng.register_exec_report_callback([&](const ExecReport& r) { seen.push_back(r); });
+    auto synthetic = make_order("~1", "X", OrderType::LIMIT, Side::SELL, 100.0, 1.0);
+    synthetic->owner_id = "MARKET";
+    synthetic->market_data_liquidity = true;
+    eng.submit_order(synthetic);
+    CHECK(seen.empty());
+    auto taker = make_order("T", "X", OrderType::IOC, Side::BUY, 100.0, 0.4);
+    taker->owner_id = "S1";
+    eng.submit_order(taker);
+    REQUIRE(seen.size() == 2);  // the taker's ACK and FILL; not the synthetic maker's FILL
+    CHECK(seen[0].type == ExecType::ACK);
+    CHECK(seen[1].type == ExecType::FILL);
+    CHECK(seen[1].order_id == "T");
+    // Sequence numbers still count the skipped reports: synthetic ACK 1, taker ACK 2, taker FILL 3, synthetic FILL 4
+    CHECK(seen[0].seq == 2);
+    CHECK(seen[1].seq == 3);
+}
+
 TEST_CASE("a new engine charges no fees") {
     MatchingEngine eng;
     CHECK(eng.fee_schedule("anyone").maker_rate == 0);

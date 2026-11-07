@@ -104,6 +104,9 @@ public:
 
     const std::string& get_symbol() const { return symbol_; }
 
+    // Whether reports for market-data liquidity are built (EngineOptions::report_market_data_liquidity)
+    void set_report_market_data(bool on) { report_market_data_ = on; }
+
     // Trading rules applied to new orders and modifications from now on
     void set_spec(const SymbolSpec& spec) { spec_ = spec; }
     const SymbolSpec* spec() const { return spec_ ? &*spec_ : nullptr; }
@@ -119,6 +122,7 @@ private:
     std::string symbol_;
     uint64_t now_ = 0;        // time of the current call (begin_call)
     bool reporting_ = true;   // build reports in the current call
+    bool report_market_data_ = true;
     ExecReport discarded_;    // written instead of a report nobody receives
     uint64_t& trade_id_seq_;
     uint64_t& report_seq_;

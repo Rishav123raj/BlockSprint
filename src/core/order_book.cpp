@@ -8,7 +8,7 @@ OrderBook::OrderBook(std::string symbol, const IClock& clock, uint64_t& trade_id
 
 ExecReport& OrderBook::report(std::vector<ExecReport>& reports, ExecType type, const Order& order, ExecReason reason) {
     ++report_seq_;
-    if (!reporting_) {
+    if (!reporting_ || (!report_market_data_ && order.market_data_liquidity)) {
         return discarded_;
     }
     ExecReport r;

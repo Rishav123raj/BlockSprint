@@ -400,48 +400,88 @@ This is jitter above the best case; the best case itself (this PC to Binance in 
 
 ### 11.1 Strategy interface (C++)
 
+As built (P3.10, `src/sim/strategy.hpp`):
+
 ```cpp
 class Strategy {
 public:
-    virtual ~Strategy() = default;
-    virtual void on_start(Context& ctx) {}
-    virtual void on_book(Context& ctx, const ObservedBook& book) {}
-    virtual void on_trade(Context& ctx, const TradeEvent& trade) {}
-    virtual void on_exec(Context& ctx, const ExecReport& report) {}
-    virtual void on_timer(Context& ctx, uint64_t timer_id) {}
-    virtual void on_gap(Context& ctx) {}
-    virtual void on_end(Context& ctx) {}
+    virtual std::string name() const = 0;
+    virtual void on_start(Context&) {}
+    virtual void on_book(Context&, const ObservedBook&) {}     // a depth event or snapshot reached the strategy
+    virtual void on_trade(Context&, const TradeEvent&) {}      // a data trade
+    virtual void on_exec(Context&, const ExecReport&) {}       // a report for one of its orders
+    virtual void on_reject(Context&, const RequestReject&) {}  // a cancel / amend / replace the exchange refused
+    virtual void on_timer(Context&, uint64_t timer_id) {}
+    virtual void on_gap(Context&) {}                           // the book is invalid until the next snapshot
+    virtual void on_end(Context&) {}
 };
 
-class Context {   // what a strategy may do
+class Context {   // what a strategy may do and know
 public:
-    uint64_t now() const;
+    uint64_t now() const;  const std::string& symbol() const;  const std::string& owner() const;
+    const ObservedBook& book() const;                               // delayed by feed latency
     OrderId send(Side, OrderType, Price, Quantity, StpPolicy = StpPolicy::CANCEL_MAKER);
-    void cancel(OrderId);
-    void amend(OrderId, Quantity new_total, std::optional<Price>);
-    const Account& account() const;            // position, cash, fees, volume
-    const OpenOrders& open_orders() const;     // as known to the strategy (acks applied)
-    uint64_t set_timer(uint64_t delay_ns);
+    void cancel(const OrderId&);
+    void amend(const OrderId&, Quantity new_total, std::optional<Price> = std::nullopt);
+    void replace(const OrderId&, Price, Quantity);                  // same ID, back of the queue
+    const Account& account() const;                                 // fills it has learned of
+    const std::map<OrderId, OpenOrder>& open_orders() const;        // as it knows them
+    uint64_t set_timer(uint64_t delay_ns);  void cancel_timer(uint64_t id);
 };
 ```
 
-Python strategies implement the same callbacks through pybind11 trampolines (Phase 4). The GIL is released during replay, and callbacks can be throttled (`every_event | on_change | timer_only`).
+`Context` is abstract so that the live platform can implement it too (L5). `on_reject` was added to the planned callbacks. A refused cancel or amend (the order already filled, an amend breaking a rule) isn't an order event, and reporting it as one would break the execution-report contract (one terminal report per order). Python strategies implement the same callbacks through pybind11 trampolines (Phase 4).
 
 ### 11.2 Gateway
 
-- Assigns order IDs (`S<strategy>-<n>`), the strategy's owner ID and STP policy.
-- Enforces Binance's limits: orders per 10 s and per day, and open orders per symbol. A violation is rejected at once, as Binance would.
-- Turns `send`, `cancel` and `amend` into `ORDER_ARRIVE` events after entry latency.
+`SimGateway` (`src/sim/gateway.*`) holds one **session** per strategy: its `Context`, its three latency channels (`feed/<owner>`, `entry/<owner>`, `ack/<owner>` RNG streams), what the strategy knows, and what the exchange knows about it. It pushes events onto the simulator's queue; the loop (P3.11) hands them back through `dispatch()`.
+
+**Strategy side.**
+- `send` assigns the ID `<owner>-<n>`, records the order as `PENDING_NEW` and queues an `ORDER_ARRIVE` at entry latency. `cancel` and `replace` mark the order `PENDING_CANCEL` / `PENDING_REPLACE`.
+- Reports and rejects arrive after ack latency, and only then change the strategy's open orders and account. At equal times a data event is delivered before a report (event class order), so a strategy that is picked off sees the trade, then its fill.
+
+**Exchange side** (at the request's arrival time):
+- **New orders and replaces** count against the session's limits: orders per 10 s (sliding window, default 100) and per day (UTC, default 200,000). An order over a limit gets a `REJECTED` report (`rate_limit`) without reaching the engine. A new order also needs a free slot: open orders per symbol (default 200), else `REJECTED` (`max_open_orders`). Both reasons are new in `ExecReason`. The gateway's own rejects carry `seq` 0.
+- A **replace** whose order is no longer open is refused (`on_reject`) and sends no new order, like Binance's cancel-replace with `STOP_ON_FAILURE`.
+- A **cancel or amend** of an order that isn't open is refused through `on_reject`, and so is an amend the engine rejects (e.g. off the tick grid). The order stays as it was.
+- **Routing:** the gateway is the engine's execution-report callback, and sends every report to the session that owns the order, whatever caused it: the strategy's own request, a data trade (the tape IOC), a crossing, or another strategy's order. The engine runs with `report_market_data_liquidity = false`, so reports for synthetic orders are never even built.
+- `set_report_listener` gives the result recorder (P3.13) every report at exchange time.
 
 ### 11.3 Accounts
 
-Per strategy:
-- base position and quote cash;
-- fees paid (from the reports' `fee`, negative for rebates);
-- traded volume;
-- maker and taker counts.
+Each session has **two** `Account`s:
+- the **exchange's**, updated when a fill happens: this is the run's result;
+- the **strategy's**, updated when the fill report reaches it: this is what `ctx.account()` returns.
 
-Accounts are updated from `FILL` reports at exchange time, not when the strategy learns of them. The strategy's own view (`open_orders`) is updated when its acks arrive.
+The plan had the strategy read the exchange-time account. That would let it learn of a fill before its report arrives, which is look-ahead, so the two are kept apart. Golden (e) checks the gap: between the fill (22 ms) and its report (27 ms) the exchange shows the position and the strategy doesn't.
+
+An account holds:
+- `position` (base), and `cash` (quote: + sells, − buys);
+- `fees` (from the reports' `fee`; negative for rebates);
+- base and quote volume;
+- fill, maker and taker counts;
+- `pnl(mark) = cash + position × mark − fees`.
+
+Notionals use `notional_for` (`fees.hpp`), exact for every Binance spot symbol.
+
+### 11.4 Golden scenario (e): latency picks off a stale quote
+
+5 ms feed, entry and ack. Data:
+- t=0: snapshot, bid 100.00 × 5, ask 100.10 × 2;
+- t=20: the asks at 100.10 go, 3 lots appear at 100.20;
+- t=22: a buyer lifts the data's best ask, 100.20, for 1 lot.
+
+The strategy joins the best ask with 1 lot and cancels when it sees its ask below the market:
+
+| ms | 5 ms each way | zero latency |
+| :--- | :--- | :--- |
+| 0 | | sees the book, sends; ACK |
+| 5 / 10 / 15 | sees the book and sends / order rests behind 2 lots / ACK | |
+| 20 | the asks ahead are pulled: the order is alone and stale | sees it, cancels: CANCELLED |
+| 22 | the buyer's tape IOC takes our cheaper ask first: **filled at 100.10** | the buyer takes 1 of the 3 synthetic lots |
+| 25 | sees the t=20 book, sends a cancel | |
+| 27 | sees the trade, then the fill | |
+| 30 / 35 | cancel arrives: order not open / `reject cancel` | |
 
 ---
 
@@ -556,7 +596,8 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.8 | Latency models, FIFO channels, per-channel RNG streams | done |
 | P3.9 | Observed book | done |
 | P3.14 (part) | `bs_sim info`, `reconstruct`, `synth`, `latency` | done |
-| P3.10–P3.13 | Gateway/strategy, loop, config, recorder | next |
+| P3.10 | Strategy interface, gateway (latency, Binance limits, routing), two accounts per strategy; golden (e) | done |
+| P3.11–P3.13 | Loop, config, recorder | next |
 | P3.15–P3.18 | Reference strategies, golden scenarios, cross-platform determinism, benchmarks | after |
 
 ---
@@ -587,12 +628,14 @@ src/sim/
   synthesizer.hpp/.cpp    L2 -> L3 into the engine; consistency checks (P3.6)
   latency_models.hpp      constant/normal/lognormal/empirical, FIFO channels, stream_rng (P3.8)
   observed_book.hpp/.cpp  the strategy's delayed L2 view (P3.9)
-  gateway.*, strategy.hpp (P3.10)
+  strategy.hpp            Strategy, Context, Account, OpenOrder, RequestReject (P3.10)
+  gateway.hpp/.cpp        sessions: latency channels, limits, routing, accounts (P3.10)
   simulator.*             (P3.11)  config.* (P3.12)          recorder.* (P3.13)
   strategies/             (P3.15)
   main.cpp                bs_sim CLI
 tests/sim/                doctest: rng, event queue, replayer, reconstruction, queue models, synthesizer
-                          (golden scenarios, random-stream invariants), latency, observed book; golden/ (P3.16)
+                          (golden scenarios, random-stream invariants), latency, observed book, gateway
+                          (golden e, limits, amend/replace/cancel, timers, two strategies, FIFO); golden/ (P3.16)
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)
 ```

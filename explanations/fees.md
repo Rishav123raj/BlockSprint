@@ -19,6 +19,8 @@ Maker/taker fees (2.0, P1.13). Every fill is charged to both sides at their owne
 
 The engine owns one `FeeBook`, shared by its books (`MatchingEngine::set_default_fee_schedule`, `set_fee_schedule`, or `POST /api/fees`). A new engine charges nothing; the live server starts with `binance_spot_regular()`. Schedules survive `reset()`.
 
+**`notional_for(price, quantity)`:** the quote value of a fill in 1e-8 units, rounded half away from zero (exact whenever the price and quantity decimals add up to 8 or fewer, which covers every Binance spot symbol). The simulator's accounts use it (P3.10).
+
 **`fee_for(price, quantity, rate)`:** the fee for one fill, in quote units of 1e-8, exact. The notional (price × quantity) is rounded to 1e-8, then the fee (notional × rate) is rounded to 1e-8, both half away from zero, using 128-bit intermediates (`int128.hpp`). It is never more than 1e-8 off the unrounded value; notionals above about 92 billion quote units saturate.
 
 ## How the book charges fees

@@ -14,6 +14,8 @@
 6. **Market data:** `bbo(symbol)` and `depth(symbol, levels)` return plain structs ([market_data.md](market_data.md)) and never create a book. `get_bbo` and `get_l2_depth` return the same data in the 1.0 JSON format for the API, tools and tests.
 7. **Trading rules and fees:** `set_symbol_spec` ([symbol_spec.md](symbol_spec.md)) and `set_default_fee_schedule` / `set_fee_schedule` ([fees.md](fees.md)). Both apply to existing and future books and survive `reset()`, which clears the books but continues the ID sequences.
 8. **Checks:** `check_invariants(symbol)` and `is_crossed(symbol)` for tests and debugging.
+9. **Reports for synthetic liquidity are optional:** with `EngineOptions::report_market_data_liquidity = false` (the simulator), reports for orders flagged `market_data_liquidity` are not built. Sequence numbers still advance, and a participant's own report for a fill against synthetic liquidity is built as usual.
+10. **`find_level(symbol, side, price)`** exposes one level's queue read-only, for the simulator's synthesizer (P3.6).
 
 ## Callbacks
 

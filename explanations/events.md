@@ -37,6 +37,8 @@ Execution reports describe the complete lifecycle of every order, in the order t
 | | `quantity_range` | Quantity is below the symbol's minimum or above its maximum |
 | | `min_notional` | Limit price × quantity is below the symbol's minimum notional |
 | | `post_only_would_take` | A post-only (`limit_maker`) order, or an amend of one, would trade on arrival instead of resting |
+| | `rate_limit` | Simulator gateway (P3.10): too many orders per 10 s or per day; the order never reached the engine |
+| | `max_open_orders` | Simulator gateway: the participant already has the maximum number of open orders on the symbol |
 
 The last four apply only to symbols with trading rules (`set_symbol_spec`, `POST /api/symbols`), and not to market-data liquidity (mirrored or replayed exchange levels). An invalid `modify` is also `rejected`; the order stays as it was.
 

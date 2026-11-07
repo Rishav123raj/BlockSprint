@@ -23,6 +23,10 @@ inline FeeSchedule binance_spot_regular() { return {100000, 100000}; }
 // Exact for fill notionals up to ~92 billion quote units (int64 in 1e-8 units); larger ones saturate.
 int64_t fee_for(Price price, Quantity quantity, int64_t rate);
 
+// Quote value of a fill (price x quantity) in 1e-8 units, rounded half away from zero to 1e-8. Exact
+// whenever price and quantity decimals add up to 8 or fewer (every Binance spot symbol). Saturates like fee_for.
+int64_t notional_for(Price price, Quantity quantity);
+
 // Fee schedule per participant (order owner), with a default for everyone else.
 class FeeBook {
 public:

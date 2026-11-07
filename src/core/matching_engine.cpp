@@ -23,6 +23,7 @@ OrderBook& MatchingEngine::get_or_create_book(const std::string& symbol) {
     auto it = books_.find(symbol);
     if (it == books_.end()) {
         auto book = std::make_unique<OrderBook>(symbol, *clock_, trade_id_seq_, report_seq_, fees_);
+        book->set_report_market_data(options_.report_market_data_liquidity);
         if (auto spec = specs_.find(symbol); spec != specs_.end()) {
             book->set_spec(spec->second);
         }
