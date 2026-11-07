@@ -4,7 +4,9 @@
 //   bs_sim reconstruct FILE.bse [options]   replay the book from the data alone; checkpoint dumps for V0
 //   bs_sim synth FILE.bse [options]         replay through the synthesizer into the engine (no strategy)
 //   bs_sim latency FILE.bse [options]       exchange -> recorder delays, for latency models
-//   bs_sim run CONFIG.json                  a full simulation (P3.11, not yet available)
+//   bs_sim config CONFIG.json [--set k=v]   the resolved run config (defaults, preset, file, overrides)
+//   bs_sim run CONFIG.json                  a full simulation (P3.14, not yet available)
+#include "config.hpp"
 #include "reconstruct.hpp"
 #include "replayer.hpp"
 #include "synthesizer.hpp"
@@ -42,40 +44,12 @@ void usage() {
         "  bs_sim latency FILE.bse [--kind trade|depth] [--window-s S] [--out VALUES.txt]\n"
         "      ts_local - ts_exch percentiles, raw and above the fastest of each S-second window (default 60);\n"
         "      --out writes the latter (us) for an empirical latency model\n"
-        "  bs_sim run CONFIG.json   (not available yet: Phase 3, P3.11)\n";
+        "  bs_sim config CONFIG.json [--set KEY.PATH=VALUE]...\n"
+        "      print the resolved run config: defaults < latency preset < file < --set overrides\n"
+        "  bs_sim run CONFIG.json   (not available yet: Phase 3, P3.14)\n";
 }
 
-// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm): portable, no timegm
-int64_t days_from_civil(int64_t y, unsigned m, unsigned d) {
-    y -= m <= 2;
-    const int64_t era = (y >= 0 ? y : y - 399) / 400;
-    const unsigned yoe = static_cast<unsigned>(y - era * 400);
-    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    return era * 146097 + static_cast<int64_t>(doe) - 719468;
-}
-
-int64_t parse_time(const std::string& text) {
-    if (text.find('T') == std::string::npos) {
-        return std::stoll(text);
-    }
-    // YYYY-MM-DDTHH:MM:SS[.fffffffff]Z
-    if (text.size() < 20 || text[4] != '-' || text[7] != '-' || text[10] != 'T' || text[13] != ':' ||
-        text[16] != ':' || text.back() != 'Z') {
-        throw std::invalid_argument("bad time: " + text + " (use ns or YYYY-MM-DDTHH:MM:SSZ)");
-    }
-    const int y = std::stoi(text.substr(0, 4)), mo = std::stoi(text.substr(5, 2)), d = std::stoi(text.substr(8, 2));
-    const int h = std::stoi(text.substr(11, 2)), mi = std::stoi(text.substr(14, 2)), s = std::stoi(text.substr(17, 2));
-    int64_t frac_ns = 0;
-    if (text.size() > 21 && text[19] == '.') {
-        std::string digits = text.substr(20, text.size() - 21);
-        digits.resize(9, '0');
-        frac_ns = std::stoll(digits);
-    }
-    const int64_t secs = days_from_civil(y, static_cast<unsigned>(mo), static_cast<unsigned>(d)) * 86400 +
-                         h * 3600 + mi * 60 + s;
-    return secs * 1000000000LL + frac_ns;
-}
+int64_t parse_time(const std::string& text) { return static_cast<int64_t>(parse_time_ns(text)); }
 
 std::string iso(int64_t ns) {
     std::time_t secs = static_cast<std::time_t>(ns / 1000000000LL);
@@ -446,6 +420,26 @@ int cmd_latency(const std::string& path, const std::vector<std::string>& args) {
     return 0;
 }
 
+int cmd_config(const std::string& path, const std::vector<std::string>& args) {
+    std::vector<std::string> overrides;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--set" && i + 1 < args.size()) {
+            overrides.push_back(args[++i]);
+        } else {
+            throw std::invalid_argument("unknown option " + args[i]);
+        }
+    }
+    const RunConfig rc = load_run_config(path, overrides);
+    std::cout << rc.resolved.dump(2) << "\n";
+    std::cerr << "data      " << rc.bse_path << (rc.bse_sha256.empty() ? "" : "  sha256 " + rc.bse_sha256) << "\n"
+              << "window    " << (rc.sim.from_ns ? format_time_ns(rc.sim.from_ns) : std::string("file start")) << " .. "
+              << (rc.sim.to_ns ? format_time_ns(rc.sim.to_ns) : std::string("file end")) << ", warm-up "
+              << static_cast<double>(rc.sim.warmup_ns) / 1e9 << " s\n"
+              << "strategy  " << rc.strategy_name << " as " << rc.owner << ", queue model " << rc.sim.queue_model
+              << ", seed " << rc.sim.seed << "\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -466,6 +460,9 @@ int main(int argc, char** argv) {
         }
         if (args[0] == "latency" && args.size() >= 2) {
             return cmd_latency(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
+        }
+        if (args[0] == "config" && args.size() >= 2) {
+            return cmd_config(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
         }
         if (args[0] == "run") {
             std::cerr << "bs_sim run: not available yet (Phase 3, P3.11)\n";

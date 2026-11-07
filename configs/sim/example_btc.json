@@ -1,0 +1,14 @@
+{
+  "description": "Example run: a passive quoter on BTCUSDT, 2026-11-05 02:00-08:00 UTC, Tokyo VPS latency",
+  "dataset": "data/packed/binance_spot_BTCUSDT-ETHUSDT_2026-11-05_2026-11-05",
+  "symbol": "BTCUSDT",
+  "window": {"from": "2026-11-05T02:00:00Z", "to": "2026-11-05T08:00:00Z", "warmup_s": 60},
+  "seed": 42,
+  "tie_break": "data_first",
+  "latency_preset": "binance_spot_tokyo_vps",
+  "queue_model": {"model": "cancel_from_back"},
+  "fees": {"maker_rate": "0.001", "taker_rate": "0.001"},
+  "limits": {"orders_per_10s": 100, "orders_per_day": 200000, "open_orders": 200},
+  "strategy": {"name": "passive_quoter", "params": {"size": "0.001", "refresh_ms": 500}},
+  "output": {"dir": "results/example_btc", "sample_ms": 1000}
+}

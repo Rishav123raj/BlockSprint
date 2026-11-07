@@ -547,6 +547,32 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 
 **Precedence:** CLI flags > config file > named presets > defaults. The resolved config is always written to `run_meta.json`.
 
+**As built (P3.12, `src/sim/config.*`; example in `configs/sim/example_btc.json`).** `load_run_config(path, overrides)` returns a `RunConfig`: the resolved JSON, the `.bse` path, symbol and SHA-256, `SimulatorOptions`, the strategy's name, params and owner, its three latency models, fees and limits, the output directory and sample interval. `session()` turns it into the gateway's `SessionConfig`.
+
+- **Layers:** defaults < the preset named by `latency_preset` < the file < `--set key.path=value` overrides. The file plus overrides choose the preset, so `--set latency_preset=zero` works.
+  - Objects merge key by key, so `--set latency.entry.median_us=2500` changes one parameter of the preset's model.
+  - A latency or queue model object that names its `model` replaces the previous model whole. A file's `{"model": "constant", "us": 500}` doesn't inherit a preset's `sigma`.
+  - An override value is parsed as JSON when it is valid JSON, otherwise taken as a string (times, names, paths).
+- **Unknown keys are errors** (`unknown key 'window.form'`), including inside latency models. Every other error names its key too.
+- **Defaults:**
+  - fees 0.1% / 0.1% (Binance regular); limits 100 per 10 s, 200,000 per day, 200 open;
+  - `cancel_from_back`, `data_first`, seed 0, the whole file, no warm-up;
+  - owner `S1`, output `results/run` sampled every 1000 ms.
+- **What a run must name:** a `dataset`, a `strategy.name`, and latency (a preset or all three models). Optimistic zero latency is never a silent default.
+- **Latency presets:**
+
+  | Preset | Feed | Entry and ack |
+  | :--- | :--- | :--- |
+  | `zero` | 0 | 0 |
+  | `binance_spot_tokyo_vps` | 100 µs | lognormal, median 3 ms, σ 0.3, min 1 ms |
+  | `binance_spot_home_pc` | 100 µs | lognormal, median 100 ms, σ 0.3, min 40 ms |
+
+  The two Binance presets are placeholders until calibration (P7.6). The home PC feed is small because `ts_local` already contains this PC's network delay.
+- **Dataset:** a packed dataset directory (its `manifest.json` gives the symbol's file and SHA-256; `symbol` is required when there are several) or a `.bse` file. The header is validated, and its symbol must match `symbol`.
+- **Times:** ns, `"YYYY-MM-DD"` (midnight UTC) or `"YYYY-MM-DDTHH:MM:SS[.fffffffff]Z"`. The resolved config holds them at full ns precision, and it resolves to itself (tested), so a run's `run_meta.json` can be run again as is.
+- **Fee rates** are exact decimal strings (or numbers); negative rates are rebates. `impact.half_life_ms` accepts only 0 for now.
+- **Queue models:** a name (`"prob_power:2"`) or `{"model": "prob_power", "n": 2}`.
+
 ### 13.2 `bs_sim`
 
 | Command | Purpose |
@@ -555,6 +581,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 | `bs_sim reconstruct FILE.bse [--top N] [--every K] [--at TS]... [--out dump.csv]` | replay data only and dump top-N levels at checkpoints (V0) |
 | `bs_sim synth FILE.bse [--model M] [--compare-every K] [--top N] [--check-every K]` | replay through the synthesizer into the engine with no strategy; compare its top N with the data, check invariants (§8.6) |
 | `bs_sim latency FILE.bse [--kind trade\|depth] [--window-s S] [--out VALUES.txt]` | `ts_local − ts_exch` percentiles, raw and above the fastest of each window; writes values for the empirical latency model (§10) |
+| `bs_sim config CONFIG.json [--set key=value]...` | print the resolved config, plus the data file, window and strategy; exits 1 with the key on an error |
 | `bs_sim run CONFIG.json [--set key=value]...` | a full simulation |
 
 ---
@@ -619,7 +646,8 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.14 (part) | `bs_sim info`, `reconstruct`, `synth`, `latency` | done |
 | P3.10 | Strategy interface, gateway (latency, Binance limits, routing), two accounts per strategy; golden (e) | done |
 | P3.11 | Simulator loop: fast-forward, window, warm-up, tie-break, sampler | done |
-| P3.12–P3.13 | Config, recorder | next |
+| P3.12 | Run config: layers, latency presets, overrides, dataset resolution; `bs_sim config` | done |
+| P3.13 | Recorder | next |
 | P3.15–P3.18 | Reference strategies, golden scenarios, cross-platform determinism, benchmarks | after |
 
 ---
@@ -653,13 +681,15 @@ src/sim/
   strategy.hpp            Strategy, Context, Account, OpenOrder, RequestReject (P3.10)
   gateway.hpp/.cpp        sessions: latency channels, limits, routing, accounts (P3.10)
   simulator.hpp/.cpp      the event loop: fast-forward, window, warm-up, tie-break, sampler (P3.11)
-  config.* (P3.12)        recorder.* (P3.13)
+  config.hpp/.cpp         run config: defaults, latency presets, overrides, dataset, times (P3.12)
+  recorder.* (P3.13)
   strategies/             (P3.15)
   main.cpp                bs_sim CLI
 tests/sim/                doctest: rng, event queue, replayer, reconstruction, queue models, synthesizer
                           (golden scenarios, random-stream invariants), latency, observed book, gateway
                           (golden e, limits, amend/replace/cancel, timers, two strategies, FIFO), simulator
-                          (window, warm-up, end of data, tie-break, determinism); golden/ (P3.16)
+                          (window, warm-up, end of data, tie-break, determinism), config; golden/ (P3.16)
+configs/sim/              example run configs
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)
 ```

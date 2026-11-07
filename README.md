@@ -256,7 +256,7 @@ BlockSprint/
 │   ├── sim/                    # Market simulator (Phase 3, docs/simulator_architecture.md):
 │   │                           #   RNG, event queue, .bse reader, reconstruction, synthesizer,
 │   │                           #   queue models, latency, observed book, strategy
-│   │                           #   gateway, simulator loop, bs_sim CLI
+│   │                           #   gateway, simulator loop, run config, bs_sim CLI
 │   ├── api/
 │   │   └── api_server.hpp/.cpp # HTTP REST and WebSocket router endpoints
 │   ├── logger.hpp              # Thread-safe file logger (levels, per-run files)
@@ -279,6 +279,7 @@ BlockSprint/
 ├── research/data/              # 2.0 market-data pipeline: recorder, normalizer, QC, packer, catalog,
 │                               #   downloader (see docs/recorder_ops.md and docs/data_pipeline.md)
 ├── research/sim/               # Simulator validation (check_reconstruct.py: gate V0)
+├── configs/sim/                # Simulator run configs (example_btc.json; bs_sim config shows the resolved one)
 │
 ├── scripts/                    # Python Validation and Benchmarking Clients
 │   ├── run_all.py              # Unified project builder, daemon manager, and validation script
