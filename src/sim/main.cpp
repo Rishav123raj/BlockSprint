@@ -2,9 +2,11 @@
 //
 //   bs_sim info FILE.bse                    header, records and batches by kind, segments, time range
 //   bs_sim reconstruct FILE.bse [options]   replay the book from the data alone; checkpoint dumps for V0
+//   bs_sim synth FILE.bse [options]         replay through the synthesizer into the engine (no strategy)
 //   bs_sim run CONFIG.json                  a full simulation (P3.11, not yet available)
 #include "reconstruct.hpp"
 #include "replayer.hpp"
+#include "synthesizer.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -12,6 +14,7 @@
 #include <ctime>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -29,6 +32,11 @@ void usage() {
         "      --every K    checkpoint every K book batches (default 0: none)\n"
         "      --at TIME    checkpoint at a time: ns since the epoch or 2026-11-05T12:00:00Z (repeatable)\n"
         "      --out PATH   write checkpoints as CSV (batch,ts_local,valid,side,level,px,qty)\n"
+        "  bs_sim synth FILE.bse [--model M] [--compare-every K] [--top N] [--check-every K]\n"
+        "      --model M          queue model (default cancel_from_back; pro_rata, prob_power:2, ...)\n"
+        "      --compare-every K  compare the engine's top N with the data every K book batches (default 1)\n"
+        "      --top N            levels per side compared (default 20)\n"
+        "      --check-every K    full consistency check every K book batches (default 0: only at the end)\n"
         "  bs_sim run CONFIG.json   (not available yet: Phase 3, P3.11)\n";
 }
 
@@ -211,6 +219,127 @@ int cmd_reconstruct(const std::string& path, const std::vector<std::string>& arg
     return (s.crossed_batches || s.ts_backwards) ? 1 : 0;
 }
 
+
+// Replays a file through the synthesizer into a matching engine with no strategy orders, and measures how
+// closely the engine's book follows the data: after a depth event it differs only where a trade hasn't been
+// confirmed by depth yet (P3.6)
+int cmd_synth(const std::string& path, const std::vector<std::string>& args) {
+    std::string model_spec = "cancel_from_back";
+    uint64_t compare_every = 1;
+    uint64_t check_every = 0;
+    size_t top_n = 20;
+    for (size_t i = 0; i < args.size(); ++i) {
+        auto value = [&]() -> const std::string& {
+            if (i + 1 >= args.size()) {
+                throw std::invalid_argument(args[i] + " needs a value");
+            }
+            return args[++i];
+        };
+        if (args[i] == "--model") {
+            model_spec = value();
+        } else if (args[i] == "--compare-every") {
+            compare_every = std::stoull(value());
+        } else if (args[i] == "--check-every") {
+            check_every = std::stoull(value());
+        } else if (args[i] == "--top") {
+            top_n = std::stoul(value());
+        } else {
+            throw std::invalid_argument("unknown option " + args[i]);
+        }
+    }
+    Replayer rp(path);
+    const auto& h = rp.header();
+    auto clock = std::make_shared<SimClock>(static_cast<uint64_t>(h.first_ts_local > 0 ? h.first_ts_local : 0));
+    MatchingEngine engine(clock, EngineOptions{false});
+    SymbolSpec spec;
+    spec.symbol = h.symbol;
+    spec.tick_size = h.tick_size;
+    spec.lot_size = h.lot_size;
+    spec.min_qty = h.lot_size;
+    spec.min_notional = h.min_notional;
+    engine.set_symbol_spec(spec);
+    auto model = make_queue_model(model_spec);
+    Rng rng(1);
+    Synthesizer synth(engine, *model, rng, SynthesizerOptions{h.symbol, h.tick_size, h.lot_size});
+
+    uint64_t book_batches = 0, compared = 0, levels_compared = 0, levels_equal = 0, books_equal = 0, checks = 0;
+    std::vector<std::string> violations;
+    std::vector<Level> data_levels;
+    auto t0 = std::chrono::steady_clock::now();
+    double compare_secs = 0;
+    Batch b{};
+    while (rp.next(b)) {
+        if (static_cast<uint64_t>(b.ts_local()) > clock->now_ns()) {
+            clock->set(static_cast<uint64_t>(b.ts_local()));
+        }
+        synth.apply(b);
+        if (!b.is_book()) {
+            continue;
+        }
+        ++book_batches;
+        if (b.kind == BatchKind::DEPTH && synth.synced() && compare_every && book_batches % compare_every == 0) {
+            auto c0 = std::chrono::steady_clock::now();
+            const Depth depth = engine.depth(h.symbol, static_cast<int>(top_n));
+            bool equal = true;
+            for (uint8_t side = 0; side < 2; ++side) {
+                synth.data().top(side, top_n, data_levels);
+                const auto& ours = side == 0 ? depth.bids : depth.asks;
+                for (size_t i = 0; i < data_levels.size(); ++i) {
+                    ++levels_compared;
+                    const bool same = i < ours.size() && ours[i].price == data_levels[i].px * h.tick_size &&
+                                      ours[i].quantity == data_levels[i].qty * h.lot_size;
+                    levels_equal += same;
+                    equal &= same;
+                }
+                equal &= ours.size() == data_levels.size();
+            }
+            ++compared;
+            books_equal += equal;
+            compare_secs += std::chrono::duration<double>(std::chrono::steady_clock::now() - c0).count();
+        }
+        if (check_every && book_batches % check_every == 0) {
+            ++checks;
+            for (auto& v : synth.check(false)) {
+                violations.push_back("batch " + std::to_string(book_batches) + ": " + v);
+            }
+        }
+    }
+    ++checks;
+    for (auto& v : synth.check(false)) {
+        violations.push_back("end: " + v);
+    }
+    for (auto& v : engine.check_invariants(h.symbol)) {
+        violations.push_back("engine: " + v);
+    }
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count() - compare_secs;
+
+    const auto& s = synth.stats();
+    auto lots = [&](int64_t q) { return decimal(q / h.lot_size, h.lot_size, h.qty_decimals); };
+    std::cout << h.symbol << " through the synthesizer (" << model->name() << ", no strategy)\n"
+              << "batches         depth " << s.depth_batches << ", snapshot " << s.snapshots << ", trade " << s.trades
+              << ", gap " << s.gaps << "  (unsynced: " << s.depth_unsynced << " depth, " << s.trades_unsynced
+              << " trades)\n"
+              << "replayed in     " << secs << " s: "
+              << static_cast<uint64_t>(static_cast<double>(rp.record_count()) / (secs > 0 ? secs : 1e-9))
+              << " records/s (comparisons excluded)\n"
+              << "quantities      added " << lots(s.added_qty) << ", cancelled (queue model) " << lots(s.cancelled_qty)
+              << ", traded " << lots(s.trade_qty) << " (tape took " << lots(s.tape_synthetic_qty)
+              << " synthetic; front removals " << lots(s.trade_front_qty) << ")\n"
+              << "dropped         " << lots(s.would_cross_qty) << " (the data itself was crossed)\n";
+    if (compared) {
+        std::printf("after depth     top %zu equal to the data in %.4f%% of %llu books; %.5f%% of %llu levels\n", top_n,
+                    100.0 * static_cast<double>(books_equal) / static_cast<double>(compared),
+                    static_cast<unsigned long long>(compared),
+                    100.0 * static_cast<double>(levels_equal) / static_cast<double>(levels_compared),
+                    static_cast<unsigned long long>(levels_compared));
+    }
+    std::cout << "consistency     " << checks << " check(s), " << violations.size() << " violation(s)\n";
+    for (size_t i = 0; i < violations.size() && i < 10; ++i) {
+        std::cout << "  " << violations[i] << "\n";
+    }
+    return violations.empty() ? 0 : 1;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -225,6 +354,9 @@ int main(int argc, char** argv) {
         }
         if (args[0] == "reconstruct" && args.size() >= 2) {
             return cmd_reconstruct(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
+        }
+        if (args[0] == "synth" && args.size() >= 2) {
+            return cmd_synth(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
         }
         if (args[0] == "run") {
             std::cerr << "bs_sim run: not available yet (Phase 3, P3.11)\n";

@@ -270,6 +270,12 @@ Depth MatchingEngine::depth(const std::string& symbol, int levels) {
     return empty;
 }
 
+const PriceLevel* MatchingEngine::find_level(const std::string& symbol, Side side, Price price) {
+    auto guard = lock();
+    OrderBook* book = find_book(symbol);
+    return book ? book->find_level(side, price) : nullptr;
+}
+
 nlohmann::json MatchingEngine::get_bbo(const std::string& symbol) {
     return bbo_to_json(symbol, bbo(symbol));
 }

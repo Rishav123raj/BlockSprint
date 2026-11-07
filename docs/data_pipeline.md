@@ -253,6 +253,15 @@ uv run python -m research.sim.check_reconstruct --dump v0_btc.csv --symbol BTCUS
 
 `reconstruct` replays the book from the data alone (no strategy) and dumps the top N levels per side every K book batches (and at `--at` times). The checker replays the same dates' `book.parquet` through the Python oracle and compares every checkpoint exactly. List the dates in the order they were packed. On Linux the binaries are `build/bs_sim` and `build/sim_tests`.
 
+The synthesizer (P3.6) turns the same data into synthetic orders in the matching engine, the book strategies will trade against. To check it on a file:
+
+```powershell
+build\Release\bs_sim.exe synth data/packed/<dataset>/BTCUSDT.bse --check-every 100000              # default model: cancel_from_back
+build\Release\bs_sim.exe synth data/packed/<dataset>/ETHUSDT.bse --model prob_power:2 --compare-every 0   # throughput only
+```
+
+It prints how often the engine's top 20 per side equals the data after a depth event (above 99.9% on 2026-11-05; the rest are trades the depth stream hasn't reflected yet) and the number of consistency violations, which must be 0 (exit code 1 otherwise).
+
 ## 7. Tests
 
 ```powershell

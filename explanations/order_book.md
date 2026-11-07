@@ -101,6 +101,7 @@ For each fill, the taker and the maker pay `fee_for(maker price, quantity, rate)
 ## Snapshots and checks
 
 - `bbo()` and `depth(levels)` return plain structs (`Bbo`, `Depth`, [market_data.md](market_data.md)) stamped with the call's time.
+- `find_level(side, price)` returns the level's queue (read-only, valid until the next mutating call), or nullptr. The simulator's synthesizer uses it to see where strategy orders sit among synthetic ones (P3.6); `MatchingEngine::find_level(symbol, side, price)` forwards to it.
 - `check_invariants()` walks every structure, O(orders), and returns one message per violation. It checks that:
   - no level is empty and each level's key equals its price;
   - every order rests on the right side at its level's price, with a positive open quantity, and is not cancelled;

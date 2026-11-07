@@ -44,6 +44,33 @@ inline double det_log(double x) {
     return 2.0 * sum + e * 0.69314718055994530942;
 }
 
+// e^x from + - * / only: x = k ln2 + r with |r| <= ln2 / 2, e^r as a series, then an exact scaling by 2^k.
+// Relative error < 1e-13 over the range where the result is a normal double (< 1e-15 for |x| < 20).
+inline double det_exp(double x) {
+    if (x != x) {
+        throw std::domain_error("det_exp: argument is NaN");
+    }
+    if (x > 709.0) {
+        return HUGE_VAL;
+    }
+    if (x < -708.0) {
+        return 0.0;
+    }
+    const double ln2 = 0.69314718055994530942;
+    const double k = std::floor(x / ln2 + 0.5);
+    const double r = x - k * ln2;
+    double term = 1.0;
+    double sum = 1.0;
+    for (int n = 1; n <= 24; ++n) {
+        term *= r / n;
+        sum += term;
+    }
+    return std::ldexp(sum, static_cast<int>(k));
+}
+
+// x^y for x > 0, deterministic (det_exp of y log x)
+inline double det_pow(double x, double y) { return det_exp(y * det_log(x)); }
+
 // xoshiro256** (Blackman & Vigna): fast, 256-bit state, passes BigCrush
 class Rng {
 public:

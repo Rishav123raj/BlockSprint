@@ -98,6 +98,10 @@ public:
     // Top `levels` aggregated price levels per side, best first
     Depth depth(int levels = 10) const;
 
+    // The resting orders at one price in queue order, or nullptr if there are none. Read-only (the
+    // simulator's synthesizer inspects queues with it, P3.6); valid until the next mutating call.
+    const PriceLevel* find_level(Side side, Price price) const;
+
     const std::string& get_symbol() const { return symbol_; }
 
     // Trading rules applied to new orders and modifications from now on

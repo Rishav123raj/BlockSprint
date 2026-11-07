@@ -80,6 +80,10 @@ public:
     Bbo bbo(const std::string& symbol);
     Depth depth(const std::string& symbol, int levels = 10);
 
+    // The resting orders at one price in queue order, or nullptr (OrderBook::find_level). For single-
+    // threaded use (the simulator): the level is valid only until the next mutating call.
+    const PriceLevel* find_level(const std::string& symbol, Side side, Price price);
+
     // The same, in the 1.0 JSON format (for the API, tools and tests; not used on the hot path)
     nlohmann::json get_bbo(const std::string& symbol);
     nlohmann::json get_l2_depth(const std::string& symbol, int depth_levels = 10);

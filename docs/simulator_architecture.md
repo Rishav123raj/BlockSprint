@@ -270,48 +270,68 @@ The engine is an L3 engine (individual orders in FIFO queues). Binance data is L
 
 ### 8.1 Operations
 
-| Data event at price p | Synthetic operation |
+Every data level's synthetic quantity is driven towards the data's **absolute** quantity at that level. The table shows what each data event does at price p (as built, P3.6: `src/sim/synthesizer.*`):
+
+| Data event | Synthetic operation |
 | :--- | :--- |
-| Level grows by Δ | New synthetic order of Δ at the **back** of the queue |
-| Trade of q at p (aggressor side from the tape) | Synthetic **IOC** of q at limit p from the aggressor side: consumes the queue front first, **including strategy orders that are ahead**. `pending_trade[p] += q` |
-| Level shrinks by Δ | First net against `pending_trade[p]` (the depth stream reflects trades a little later). Any residual is an **unexplained cancel**: the QueueModel picks which synthetic quantity to remove; strategy orders are never cancelled by data |
-| Level removed (0) | Remove all synthetic quantity there |
-| Snapshot | Reconcile: compute each level's target, apply the difference as the operations above |
-| Gap | Remove all synthetic orders; clear pending trades |
+| Trade of q at p (aggressor side from the tape) | A **tape IOC** (owner `MARKET_TAPE`, market-data liquidity, no fees) of q at limit p from the aggressor side. It consumes the queue front first, **including strategy orders that are ahead** at p, or that sit at a better price (a trade through them). The real trade consumed q of *real* liquidity at p, so whatever the synthetic queue at p didn't give (strategy orders or stale better levels took it) is then removed from the **front** of the synthetic queue at p |
+| Depth: level above its synthetic quantity | The difference joins the **back** (merged into the last order when that one is synthetic too) |
+| Depth: level below its synthetic quantity | The excess is an **unexplained cancel**; the QueueModel picks which synthetic quantity goes. Strategy orders are never cancelled by data |
+| Level removed (0) | All synthetic quantity there goes |
+| Snapshot | Every level the book had or the snapshot has is reconciled the same way (§8.5) |
+| Gap | All synthetic orders are removed; until the next snapshot, depth events are ignored and trades aren't matched |
+
+Within a batch, all decreases are applied before any increase: until every shrinking level has shrunk, an addition could meet a stale level on the other side.
 
 ### 8.2 Netting trades against depth
 
-Binance publishes trades in real time and depth as 100 ms aggregates. A trade's effect therefore shows up twice: as the trade, and as a smaller level in the next depth event. Without netting, the level would shrink twice.
+Binance publishes trades in real time and depth as 100 ms aggregates, so a trade's effect shows up twice: as the trade, and as a smaller level in the next depth event. Without netting, the level would shrink twice and a strategy order would jump forward.
+
+The plan specified a `pending_trade_qty` map. Targeting the absolute quantity makes it unnecessary: the trade has already removed its q from the synthetic queue when the depth event that reflects it arrives, so the synthetic level already equals the new data quantity and nothing more is removed. Only a decrease *beyond* the trades (real cancels) reaches the QueueModel. Golden scenario (c) pins this.
 
 ```
-on trade (p, q):         pending[p] += q; synthetic IOC consumes q at p
-on depth (p, new_qty):   current = synthetic_qty(p) + strategy_qty(p)   (strategy excluded, below)
-                         target  = new_qty
-                         if target < data_qty(p):              decrease = data_qty(p) - target
-                             explained = min(decrease, pending[p]); pending[p] -= explained
-                             cancel_unexplained(decrease - explained)
-                         else if target > data_qty(p):          add_back(target - data_qty(p))
+on trade (p, q):     before = synthetic(p); tape IOC q at p; after = synthetic(p)
+                     remove_from_front(p, q - (before - after))      // what others took instead
+on depth (p, data):  s = synthetic(p)
+                     if s > data: queue_model_cancel(p, s - data)    // real cancels only
+                     if s < data: add_at_back(p, data - s)
 ```
 
-`data_qty(p)` is the reconstructor's quantity: what the data says, which excludes strategy orders. Pending quantities that the depth stream never confirms expire after a bounded time (configurable, default 1 s) and are logged, so they can't distort later levels.
+If a depth event arrives *before* the trade it reflects, the decrease is treated as a cancel and the trade then removes q again; the next depth event at that price adds it back. Only queue position is affected, briefly; the level's total recovers. The `bs_sim synth` measurement below bounds how often the book differs from the data.
 
 ### 8.3 Strategy orders and the data
 
 "Your order has no impact on others' behaviour" is the documented assumption:
-- **A trade reaching a strategy order that is ahead in the queue fills it.** The historical trade also consumed someone else's liquidity in reality, and the data will show that decrease. Netting (§8.2) applies the residual to synthetic orders, so the level's total converges to the data.
-- **Crossing fill.** If the data's opposite side moves through a resting strategy order (e.g. the best ask drops below the strategy's bid), the real market would have traded with it. The synthesizer issues the implied trade at the strategy's price, for the crossed quantity.
-- **Strategy taker orders.** They consume synthetic liquidity that the data will keep showing. The **impact overlay** remembers the consumed quantity per price and subtracts it from later depth targets, decaying with half-life τ (τ = 0: no memory; default 0 in P3, configurable).
+- **A trade reaching a strategy order fills it:** one that is ahead in the queue at the trade price, or one at a better price (the aggressor would have hit it first). The historical trade also consumed someone else's liquidity in reality, so the same quantity is removed from the front of the synthetic queue at the trade price.
+- **Crossing fill.** A synthetic order added at a price that crosses a resting strategy order (e.g. a new data bid above the strategy's ask) trades with it at the **strategy order's price**, for at most the added quantity; the rest rests. After a gap, the resync snapshot can fill strategy orders the market moved through. Golden scenarios (d) and (g).
+- **Strategy taker orders** consume synthetic liquidity that the data keeps showing. With impact half-life 0 (the P3 default), the level is set back to the data the next time the data changes it; until then the consumed quantity stays gone. A decaying overlay (τ > 0) is an extension.
 
 ### 8.4 Invariants
 
-After every batch, with any strategy:
-- synthetic quantity at each level = max(0, data quantity − consumed overlay);
-- the engine's book is never crossed: the engine guarantees it, and a crossing fill resolves data moving through a strategy order;
-- every strategy fill has a matching historical trade, or a crossing.
+Checked by `Synthesizer::check` (tests, `bs_sim synth --check-every`):
+- synthetic quantity exists only at prices the data has, and never exceeds the data's quantity there;
+- with no strategy orders, every data level equals its synthetic quantity after each book batch, provided every trade was confirmed by depth (random-stream tests, all five models);
+- the engine's book is never crossed and passes `check_invariants`;
+- every strategy fill has a historical trade or a crossing behind it.
 
 ### 8.5 Snapshot reconciliation
 
-A snapshot (resync after a gap, or the day-start synthetic snapshot) gives the full target book. Levels are diffed against the synthetic book and changed with the §8.1 operations: growth appends, shrinkage goes through the QueueModel, and missing levels are removed. Strategy orders keep their place.
+A snapshot (resync after a gap, or the day-start synthetic snapshot) gives the full target book. Every level of the old book and the snapshot is reconciled with the §8.1 rules: growth appends, shrinkage goes through the QueueModel, and missing levels are removed. Strategy orders keep their place.
+
+### 8.6 Measured on real data (2026-11-05, no strategy)
+
+`bs_sim synth` replays a file through the synthesizer into the engine and compares the engine's top 20 per side with the data after every depth event:
+
+| | BTCUSDT | ETHUSDT |
+| :--- | :--- | :--- |
+| Depth events compared | 530,461 | 526,860 |
+| Top 20 identical (whole book) | 99.91% | 99.97% |
+| Levels identical | 99.990% | 99.998% |
+| Consistency violations | 0 | 0 |
+| Data crossed (synthetic dropped) | 0 | 0 |
+| Throughput (MSVC, this PC) | 0.71 M records/s (30 s for the day) | 0.74 M records/s |
+
+The remaining differences are trades not yet reflected by depth when the comparison runs (a level the tape has consumed before the data says so). Throughput is well below the replay-only figure: each change goes through the engine's order API (string IDs, shared orders, map lookups). Making it fast is P3.18.
 
 ---
 
@@ -330,6 +350,13 @@ When a level shrinks without a trade, *where* in the FIFO queue did the cancel h
 **Interface:**
 - **Input:** the level's synthetic orders in queue order, the positions of the strategy orders among them, the quantity to remove, and the `Rng`.
 - **Output:** (synthetic order, quantity) reductions, applied by the synthesizer through the engine's priority-preserving amend.
+
+As built (P3.7, `src/sim/queue_models.hpp`; config names `cancel_from_back`, `cancel_from_front`, `pro_rata`, `prob_power:<n>`, `prob_log`):
+- shares are in whole lots; `pro_rata` rounds by largest remainder, ties going to the newer order;
+- `prob_power` / `prob_log` use the **expected split** (the share ahead times the cancel, rounded to a lot) rather than a random draw, as hftbacktest does, so they consume no random numbers. "Ahead" is relative to the first strategy order in the level; within each part, quantity is taken from the back. A level without a strategy order falls back to `cancel_from_back`;
+- powers use `det_pow` (`rng.hpp`: `det_exp` and `det_log` from + − × ÷ only), so results are identical across compilers.
+
+Merging adjacent synthetic orders (§8.1) changes nothing for any of these models: none of them can tell two adjacent synthetic orders from one.
 
 Default: `CancelFromBack`. Results must be reported with a sensitivity sweep over models (V3).
 
@@ -445,6 +472,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 | :--- | :--- |
 | `bs_sim info FILE.bse` | header, record counts by kind, time range, batches, segments |
 | `bs_sim reconstruct FILE.bse [--top N] [--every K] [--at TS]... [--out dump.csv]` | replay data only and dump top-N levels at checkpoints (V0) |
+| `bs_sim synth FILE.bse [--model M] [--compare-every K] [--top N] [--check-every K]` | replay through the synthesizer into the engine with no strategy; compare its top N with the data, check invariants (§8.6) |
 | `bs_sim run CONFIG.json [--set key=value]...` | a full simulation |
 
 ---
@@ -502,8 +530,10 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.3 | EventQueue | done |
 | P3.4 | `.bse` reader (mmap) | done |
 | P3.5 | Reconstruction mode + V0 vs oracle | done |
-| P3.14 (part) | `bs_sim info`, `bs_sim reconstruct` | done |
-| P3.6–P3.13 | Synthesizer, queue and latency models, observed book, gateway/strategy, loop, config, recorder | next, golden-scenario first |
+| P3.6 | Synthesizer (L2 → L3), golden scenarios (a), (b), (c), (d), (f), (g) at engine level | done |
+| P3.7 | Queue models (five) | done |
+| P3.14 (part) | `bs_sim info`, `bs_sim reconstruct`, `bs_sim synth` | done |
+| P3.8–P3.13 | Latency models, observed book, gateway/strategy, loop, config, recorder | next |
 | P3.15–P3.18 | Reference strategies, golden scenarios, cross-platform determinism, benchmarks | after |
 
 ---
@@ -530,12 +560,15 @@ src/sim/
   replayer.hpp/.cpp       header validation, record and batch iteration
   l2_book.hpp             pure L2 book (ticks/lots)
   reconstruct.hpp/.cpp    reconstruction mode: checkpoints, top-N dumps
-  synthesizer.*           (P3.6)   queue_models.hpp (P3.7)   latency_models.hpp (P3.8)
+  queue_models.hpp        five cancel-placement models (P3.7)
+  synthesizer.hpp/.cpp    L2 -> L3 into the engine; consistency checks (P3.6)
+  latency_models.hpp      (P3.8)
   observed_book.*         (P3.9)   gateway.*, strategy.hpp (P3.10)
   simulator.*             (P3.11)  config.* (P3.12)          recorder.* (P3.13)
   strategies/             (P3.15)
   main.cpp                bs_sim CLI
-tests/sim/                doctest: rng, event queue, replayer, reconstruction; golden/ (P3.16)
+tests/sim/                doctest: rng, event queue, replayer, reconstruction, queue models, synthesizer
+                          (golden scenarios, random-stream invariants); golden/ (P3.16)
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)
 ```
@@ -549,6 +582,8 @@ CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable
 - **No passive impact:** strategy quotes don't change other participants' behaviour.
 - **L2 data:** queue positions inside a level are modelled, not observed (that's what the queue models are for).
 - **Depth is 100 ms aggregates:** changes within 100 ms are invisible. Netting handles the trade/depth overlap, but very short-lived liquidity is lost.
+- **Taker impact lasts until the data next changes the level** (half-life 0 in P3; §8.3).
+- **Trade-through fills:** a strategy order priced better than a historical trade is filled by it, up to the trade's quantity.
 - **`ts_local` includes this PC's network delay.** Recordings from a Tokyo VPS give more realistic timing (see [recorder_ops.md](recorder_ops.md)).
 - **Gaps:** no matching against the book during a gap; trades during gaps are informational.
 - **One symbol per run in P3.** Multi-symbol runs (shared account, cross-symbol strategies) are an extension (§20).

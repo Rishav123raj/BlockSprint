@@ -537,6 +537,15 @@ std::vector<std::string> OrderBook::check_invariants() const {
     return violations;
 }
 
+const PriceLevel* OrderBook::find_level(Side side, Price price) const {
+    if (side == Side::BUY) {
+        auto it = bids_.find(price);
+        return it == bids_.end() ? nullptr : &it->second;
+    }
+    auto it = asks_.find(price);
+    return it == asks_.end() ? nullptr : &it->second;
+}
+
 bool OrderBook::is_crossed() const {
     return !bids_.empty() && !asks_.empty() && bids_.begin()->first >= asks_.begin()->first;
 }
