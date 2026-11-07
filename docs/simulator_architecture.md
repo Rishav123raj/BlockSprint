@@ -466,7 +466,7 @@ public:
 - A **replace** whose order is no longer open is refused (`on_reject`) and sends no new order, like Binance's cancel-replace with `STOP_ON_FAILURE`.
 - A **cancel or amend** of an order that isn't open is refused through `on_reject`, and so is an amend the engine rejects (e.g. off the tick grid). The order stays as it was.
 - **Routing:** the gateway is the engine's execution-report callback, and sends every report to the session that owns the order, whatever caused it: the strategy's own request, a data trade (the tape IOC), a crossing, or another strategy's order. The engine runs with `report_market_data_liquidity = false`, so reports for synthetic orders are never even built.
-- `set_report_listener` gives the result recorder (P3.13) every report at exchange time.
+- `set_listener(GatewayListener*)` shows every request, report and refused request when it is sent, with its delivery time (the result recorder, P3.13).
 
 ### 11.3 Accounts
 
@@ -520,6 +520,32 @@ One directory per run:
 | `output_hash` | a canonical hash over all outputs (for V1) |
 
 CSV comes first because it's simple and diffable; Python converts it to Parquet (Phase 4). The record layouts are canonical, so the output hash is stable.
+
+**As built (P3.13, `src/sim/recorder.*`, `src/sim/sha256.hpp`).** `ResultRecorder(sim, dir, sample_ns)` attaches before `run()`. It becomes the gateway's `GatewayListener` (which replaced P3.10's report callback: it sees each request, report and refused request when it is sent, with its delivery time) and the simulator's sampler. `finish(meta)` after the run writes the final positions, hashes the files and writes `run_meta.json`.
+
+| File | One row per | Columns |
+| :--- | :--- | :--- |
+| `orders.csv` | request, when sent | `sent_ns, arrive_ns, owner, request` (new/cancel/amend/replace)`, order_id, side, order_type, price, quantity, new_price, stp` |
+| `exec_reports.csv` | report for a strategy order | `exchange_ns, deliver_ns, owner, seq, order_id, type, reason, side, order_type, price, quantity, last_px, last_qty, cum_qty, leaves_qty, liquidity, fee, cum_fee` |
+| `request_rejects.csv` | refused cancel/amend/replace | `exchange_ns, deliver_ns, owner, request, order_id, reason, text` |
+| `bbo_samples.csv` | sample × strategy | `ts_ns, owner`, then bid/ask price and quantity three times: the data (`data_*`), the engine book with strategy orders (`book_*`), what the strategy sees (`seen_*`), and `seen_data_ns` (the data time of its newest batch) |
+| `positions.csv` | sample × strategy, and the end | `ts_ns, owner, position, cash, fees, mark, pnl, fills, maker_fills, taker_fills, open_orders, base_volume, quote_volume` (exchange-time account) |
+
+- **Formats:** times are ns; prices, quantities and money are exact decimals.
+- **Mark:** the data's mid (else the engine book's, else the last one).
+- **Requests still in flight at the end are recorded:** each is written when sent, with its arrival time.
+- **`run_meta.json`** holds:
+  - the window, simulator options and the `.bse` header (with its source manifest hash);
+  - event counts by class, synthesizer counts;
+  - per strategy: both accounts, its gateway counters and its open orders;
+  - per output file: rows and SHA-256, and the `output_hash`;
+  - the caller's `meta`. `run_inputs(RunConfig)` supplies the resolved config, its SHA-256, the data file, its manifest and the manifest's SHA-256; `bs_sim run` (P3.14) will add the git SHA and wall time.
+- **`output_hash`** is the SHA-256 over the five CSVs' names and hashes. Everything except caller-supplied wall time is a function of the inputs.
+- **Tested:**
+  - golden (e) row by row: the cancel at 25 → 30 refused at 35, the fill at 22 delivered at 27, the samples, and the end position −0.001 at cash 0.1001;
+  - SHA-256 against the FIPS vectors;
+  - the same seed gives identical files and hash, another seed a different hash.
+- **On real data** (BTCUSDT 02:00–03:00 UTC, the two-sided quoter, 1 s samples): 3,676 requests, 10,049 reports, 396 refused requests, 3,600 samples, about 2.5 MB. Identical output hash twice, and the recorder adds under 2% to the run time.
 
 ---
 
@@ -647,7 +673,8 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.10 | Strategy interface, gateway (latency, Binance limits, routing), two accounts per strategy; golden (e) | done |
 | P3.11 | Simulator loop: fast-forward, window, warm-up, tie-break, sampler | done |
 | P3.12 | Run config: layers, latency presets, overrides, dataset resolution; `bs_sim config` | done |
-| P3.13 | Recorder | next |
+| P3.13 | Result recorder: five CSVs, run_meta.json, output hash (SHA-256) | done |
+| P3.14 | `bs_sim run` | next |
 | P3.15–P3.18 | Reference strategies, golden scenarios, cross-platform determinism, benchmarks | after |
 
 ---
@@ -682,13 +709,15 @@ src/sim/
   gateway.hpp/.cpp        sessions: latency channels, limits, routing, accounts (P3.10)
   simulator.hpp/.cpp      the event loop: fast-forward, window, warm-up, tie-break, sampler (P3.11)
   config.hpp/.cpp         run config: defaults, latency presets, overrides, dataset, times (P3.12)
-  recorder.* (P3.13)
+  recorder.hpp/.cpp       CSV outputs, run_meta.json, output hash; run_inputs (P3.13)
+  sha256.hpp              SHA-256 for config, manifest and output hashes (P3.13)
   strategies/             (P3.15)
   main.cpp                bs_sim CLI
 tests/sim/                doctest: rng, event queue, replayer, reconstruction, queue models, synthesizer
                           (golden scenarios, random-stream invariants), latency, observed book, gateway
                           (golden e, limits, amend/replace/cancel, timers, two strategies, FIFO), simulator
-                          (window, warm-up, end of data, tie-break, determinism), config; golden/ (P3.16)
+                          (window, warm-up, end of data, tie-break, determinism), config, recorder
+                          (golden e rows, SHA-256 vectors, output hashes); sim_helpers.hpp; golden/ (P3.16)
 configs/sim/              example run configs
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)

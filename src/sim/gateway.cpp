@@ -303,14 +303,12 @@ public:
         if (r.type == ExecType::FILL) {
             exchange_account_.apply_fill(r);
         }
-        if (gw_.report_listener_) {
-            gw_.report_listener_(index_, r);
-        }
         to_strategy(r);
     }
 
     Strategy& strategy() { return strategy_; }
     const Account& exchange_account() const { return exchange_account_; }
+    size_t exchange_open_orders() const { return exchange_open_.size(); }
     SessionStats stats() const {
         SessionStats s = stats_;
         s.held_back = feed_.held_back() + entry_.held_back() + ack_.held_back();
@@ -334,11 +332,19 @@ private:
 
     void to_exchange(Request r) {
         r.sent_at = now();
-        gw_.queue_.push(entry_.arrival(r.sent_at), EventClass::ORDER_ARRIVE, SimEvent{index_, std::move(r)});
+        const uint64_t arrive = entry_.arrival(r.sent_at);
+        if (gw_.listener_) {
+            gw_.listener_->on_request(index_, r, arrive);
+        }
+        gw_.queue_.push(arrive, EventClass::ORDER_ARRIVE, SimEvent{index_, std::move(r)});
     }
 
     void to_strategy(const ExecReport& r) {
-        gw_.queue_.push(ack_.arrival(now()), EventClass::STRATEGY_EXEC, SimEvent{index_, r});
+        const uint64_t deliver = ack_.arrival(now());
+        if (gw_.listener_) {
+            gw_.listener_->on_report(index_, r, deliver);
+        }
+        gw_.queue_.push(deliver, EventClass::STRATEGY_EXEC, SimEvent{index_, r});
     }
 
     void reject_request(RequestReject::Request request, const OrderId& id, ExecReason reason, std::string text) {
@@ -348,7 +354,11 @@ private:
         rr.reason = reason;
         rr.text = std::move(text);
         rr.exchange_time = now();
-        gw_.queue_.push(ack_.arrival(now()), EventClass::STRATEGY_EXEC, SimEvent{index_, std::move(rr)});
+        const uint64_t deliver = ack_.arrival(now());
+        if (gw_.listener_) {
+            gw_.listener_->on_request_reject(index_, rr, deliver);
+        }
+        gw_.queue_.push(deliver, EventClass::STRATEGY_EXEC, SimEvent{index_, std::move(rr)});
     }
 
     // A new order refused before the engine: one REJECTED report, as the engine would send (seq 0: it
@@ -366,9 +376,6 @@ private:
         rep.order_type = r.order_type;
         rep.price = r.price;
         rep.quantity = r.quantity;
-        if (gw_.report_listener_) {
-            gw_.report_listener_(index_, rep);
-        }
         to_strategy(rep);
     }
 
@@ -516,5 +523,9 @@ SessionStats SimGateway::stats(uint32_t session) const { return sessions_.at(ses
 Context& SimGateway::context(uint32_t session) { return *sessions_.at(session); }
 
 const std::string& SimGateway::owner(uint32_t session) const { return sessions_.at(session)->owner(); }
+
+const Strategy& SimGateway::strategy(uint32_t session) const { return sessions_.at(session)->strategy(); }
+
+size_t SimGateway::exchange_open_orders(uint32_t session) const { return sessions_.at(session)->exchange_open_orders(); }
 
 } // namespace sim

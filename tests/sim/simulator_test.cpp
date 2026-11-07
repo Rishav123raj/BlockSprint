@@ -1,6 +1,6 @@
 // The simulator loop (P3.11): fast-forward, window, warm-up, end of data, tie-breaking, sampling, determinism.
 #include <doctest.h>
-#include "simulator.hpp"
+#include "sim_helpers.hpp"
 
 #include <filesystem>
 #include <functional>
@@ -11,104 +11,9 @@
 #include <tuple>
 #include <vector>
 
-using namespace sim;
-namespace fs = std::filesystem;
+using namespace simtest;
 
 namespace {
-
-constexpr int64_t kLot = 100000;  // 0.001
-constexpr uint64_t kMs = 1000000;
-constexpr uint8_t BID = 0, ASK = 1;
-constexpr uint8_t AGGR_BUY = 0;
-
-struct TempFile {
-    fs::path path;
-    TempFile() {
-        std::random_device rd;
-        path = fs::temp_directory_path() / ("bs_sim_loop_" + std::to_string(rd()) + std::to_string(rd()) + ".bse");
-    }
-    ~TempFile() {
-        std::error_code ec;
-        fs::remove(path, ec);
-    }
-    std::string str() const { return path.string(); }
-};
-
-bse::Header test_header() {
-    bse::Header h;
-    h.symbol = "TESTUSDT";
-    h.tick_size = 1000000;  // 0.01
-    h.lot_size = kLot;
-    h.price_decimals = 2;
-    h.qty_decimals = 3;
-    h.min_notional = 0;
-    return h;
-}
-
-// Builds a record stream; times in ms unless noted
-struct Stream {
-    std::vector<bse::Record> r;
-
-    static bse::Record rec(int64_t ts_ns, uint8_t kind, uint8_t side, int64_t px, int64_t qty, uint16_t flags = 0) {
-        return bse::Record{ts_ns, ts_ns, px, qty, 1, kind, side, flags};
-    }
-    Stream& snapshot(int64_t ms, std::vector<std::tuple<uint8_t, int64_t, int64_t>> levels) {
-        const int64_t t = ms * static_cast<int64_t>(kMs);
-        r.push_back(rec(t, bse::SNAP_BEGIN, 0, 0, 0, bse::FROM_SNAPSHOT));
-        for (auto [side, px, qty] : levels) r.push_back(rec(t, bse::SNAP_LEVEL, side, px, qty, bse::FROM_SNAPSHOT));
-        r.push_back(rec(t, bse::SNAP_END, 0, 0, 0, bse::FROM_SNAPSHOT | bse::LAST_IN_BATCH));
-        return *this;
-    }
-    Stream& depth_ns(int64_t t, std::vector<std::tuple<uint8_t, int64_t, int64_t>> levels) {
-        for (auto [side, px, qty] : levels) r.push_back(rec(t, bse::DELTA, side, px, qty));
-        r.back().flags = bse::LAST_IN_BATCH;
-        return *this;
-    }
-    Stream& depth(int64_t ms, std::vector<std::tuple<uint8_t, int64_t, int64_t>> levels) {
-        return depth_ns(ms * static_cast<int64_t>(kMs), std::move(levels));
-    }
-    Stream& trade_ns(int64_t t, uint8_t aggressor, int64_t px, int64_t lots) {
-        r.push_back(rec(t, bse::TRADE, aggressor, px, lots));
-        return *this;
-    }
-    Stream& trade(int64_t ms, uint8_t aggressor, int64_t px, int64_t lots) {
-        return trade_ns(ms * static_cast<int64_t>(kMs), aggressor, px, lots);
-    }
-    void write(const TempFile& f) const { bse::write_file(f.str(), test_header(), r); }
-};
-
-std::shared_ptr<const LatencyModel> constant_ms(double ms) { return std::make_shared<ConstantLatency>(ms * 1e6); }
-
-SessionConfig session(const std::string& owner, double latency_ms) {
-    SessionConfig c;
-    c.owner = owner;
-    c.feed = c.entry = c.ack = constant_ms(latency_ms);
-    return c;
-}
-
-// A strategy assembled from lambdas, logging "<ms> <what>"
-struct Script : Strategy {
-    std::function<void(Script&, Context&)> start;
-    std::function<void(Script&, Context&, const ObservedBook&)> book;
-    std::function<void(Script&, Context&)> end;
-    std::vector<std::string> log;
-
-    std::string name() const override { return "script"; }
-    void note(const Context& ctx, const std::string& what) { log.push_back(std::to_string(ctx.now() / kMs) + " " + what); }
-
-    void on_start(Context& ctx) override {
-        if (start) start(*this, ctx);
-    }
-    void on_book(Context& ctx, const ObservedBook& b) override {
-        if (book) book(*this, ctx, b);
-    }
-    void on_trade(Context& ctx, const TradeEvent&) override { note(ctx, "trade"); }
-    void on_exec(Context& ctx, const ExecReport& r) override { note(ctx, execTypeToString(r.type)); }
-    void on_timer(Context& ctx, uint64_t id) override { note(ctx, "timer " + std::to_string(id)); }
-    void on_end(Context& ctx) override {
-        if (end) end(*this, ctx);
-    }
-};
 
 // Snapshot at 0 (bid 100.00 x 5, ask 100.10 x 2); depth every 10 ms to 100 (bid qty 5 + ms/10); a trade at 45
 Stream ten_ms_stream() {
@@ -305,11 +210,17 @@ TEST_CASE("the same seed gives the same run; another seed gives other latencies"
         c.entry = std::make_shared<LogNormalLatency>(2e6, 0.5);
         c.ack = std::make_shared<LogNormalLatency>(1e6, 0.5);
         sim.add_strategy(st, c);
-        std::vector<std::string> trace;
-        sim.gateway().set_report_listener([&](uint32_t, const ExecReport& r) {
-            trace.push_back(std::to_string(r.timestamp) + " " + r.order_id + " " + execTypeToString(r.type));
-        });
+        struct Trace : GatewayListener {
+            std::vector<std::string> lines;
+            void on_report(uint32_t, const ExecReport& r, uint64_t deliver_at) override {
+                lines.push_back(std::to_string(r.timestamp) + " " + r.order_id + " " + execTypeToString(r.type) + " " +
+                                std::to_string(deliver_at));
+            }
+        } tracer;
+        sim.gateway().set_listener(&tracer);
         sim.run();
+        sim.gateway().set_listener(nullptr);
+        const std::vector<std::string>& trace = tracer.lines;
         const Account& a = sim.gateway().exchange_account(0);
         return std::make_tuple(trace, a.position, a.cash, a.fills);
     };

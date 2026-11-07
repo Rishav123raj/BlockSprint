@@ -118,6 +118,7 @@ if(BLOCKSPRINT_BUILD_SIM)
         src/sim/gateway.cpp
         src/sim/simulator.cpp
         src/sim/config.cpp
+        src/sim/recorder.cpp
     )
     target_include_directories(sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/sim)
     target_link_libraries(sim PUBLIC engine_core)
@@ -137,6 +138,7 @@ if(BLOCKSPRINT_BUILD_SIM)
             tests/sim/gateway_test.cpp
             tests/sim/simulator_test.cpp
             tests/sim/config_test.cpp
+            tests/sim/recorder_test.cpp
         )
         target_include_directories(sim_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest)
         target_link_libraries(sim_tests PRIVATE sim)

@@ -256,7 +256,8 @@ BlockSprint/
 │   ├── sim/                    # Market simulator (Phase 3, docs/simulator_architecture.md):
 │   │                           #   RNG, event queue, .bse reader, reconstruction, synthesizer,
 │   │                           #   queue models, latency, observed book, strategy
-│   │                           #   gateway, simulator loop, run config, bs_sim CLI
+│   │                           #   gateway, simulator loop, run config, result
+│   │                           #   recorder, bs_sim CLI
 │   ├── api/
 │   │   └── api_server.hpp/.cpp # HTTP REST and WebSocket router endpoints
 │   ├── logger.hpp              # Thread-safe file logger (levels, per-run files)

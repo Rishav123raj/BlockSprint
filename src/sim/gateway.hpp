@@ -77,6 +77,19 @@ struct SessionConfig {
     GatewayLimits limits{};
 };
 
+// Sees every message between the strategies and the exchange, e.g. the result recorder (P3.13). Called
+// when the message is sent, with the time it will be delivered.
+class GatewayListener {
+public:
+    virtual ~GatewayListener() = default;
+    // A request leaving a strategy (now = sent_at); it reaches the exchange at arrive_at
+    virtual void on_request(uint32_t /*session*/, const Request& /*r*/, uint64_t /*arrive_at*/) {}
+    // A report for a strategy's order at exchange time; the strategy receives it at deliver_at
+    virtual void on_report(uint32_t /*session*/, const ExecReport& /*r*/, uint64_t /*deliver_at*/) {}
+    // A refused cancel / amend / replace at exchange time; the strategy learns of it at deliver_at
+    virtual void on_request_reject(uint32_t /*session*/, const RequestReject& /*r*/, uint64_t /*deliver_at*/) {}
+};
+
 struct SessionStats {
     uint64_t orders_sent = 0;     // new orders
     uint64_t cancels_sent = 0;
@@ -120,11 +133,11 @@ public:
     SessionStats stats(uint32_t session) const;
     Context& context(uint32_t session);
     const std::string& owner(uint32_t session) const;
+    const Strategy& strategy(uint32_t session) const;
+    size_t exchange_open_orders(uint32_t session) const;  // as the exchange knows them
 
-    // Every report for a strategy's order at exchange time (before ack latency), e.g. for the result recorder
-    void set_report_listener(std::function<void(uint32_t session, const ExecReport&)> listener) {
-        report_listener_ = std::move(listener);
-    }
+    // nullptr to remove; the listener must outlive the gateway or be removed first
+    void set_listener(GatewayListener* listener) { listener_ = listener; }
 
 private:
     class Session;
@@ -141,7 +154,7 @@ private:
     uint64_t trading_from_ = 0;
     std::vector<std::unique_ptr<Session>> sessions_;
     std::unordered_map<std::string, uint32_t> by_owner_;
-    std::function<void(uint32_t, const ExecReport&)> report_listener_;
+    GatewayListener* listener_ = nullptr;
 };
 
 } // namespace sim
