@@ -109,6 +109,8 @@ public:
     // Loop interface
     void start();                              // on_start of every strategy, at the clock's time
     void publish(const Batch& batch);          // a batch was applied at the exchange now: deliver it after feed latency
+    void observe(const Batch& batch);          // fast-forward: update the observed books now, no latency or callbacks
+    void set_trading_from(uint64_t t) { trading_from_ = t; }  // requests before t throw (warm-up)
     void dispatch(const SimQueue::Event& e);   // ORDER_ARRIVE, STRATEGY_MD, STRATEGY_EXEC and TIMER events
     void end();                                // on_end of every strategy
 
@@ -136,6 +138,7 @@ private:
     int64_t tick_;
     int64_t lot_;
     uint64_t seed_;
+    uint64_t trading_from_ = 0;
     std::vector<std::unique_ptr<Session>> sessions_;
     std::unordered_map<std::string, uint32_t> by_owner_;
     std::function<void(uint32_t, const ExecReport&)> report_listener_;

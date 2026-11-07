@@ -118,6 +118,20 @@ TEST_CASE("events come out by time, then class, then insertion order") {
     CHECK_THROWS_AS(q.pop(), std::out_of_range);
 }
 
+TEST_CASE("orders_first puts an order arrival before market data at the same time, nothing else changes") {
+    EventQueue<std::string> q(TieBreak::ORDERS_FIRST);
+    q.push(100, EventClass::STRATEGY_MD, "smd@100");
+    q.push(100, EventClass::MARKET_DATA, "md@100");
+    q.push(100, EventClass::ORDER_ARRIVE, "order@100");
+    q.push(90, EventClass::MARKET_DATA, "md@90");
+    q.push(100, EventClass::TIMER, "timer@100");
+    std::vector<std::string> order;
+    while (!q.empty()) {
+        order.push_back(q.pop().payload);
+    }
+    CHECK(order == std::vector<std::string>{"md@90", "order@100", "md@100", "smd@100", "timer@100"});
+}
+
 TEST_CASE("push returns increasing sequence numbers") {
     EventQueue<int> q;
     CHECK(q.push(5, EventClass::TIMER, 1) == 0);

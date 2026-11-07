@@ -82,6 +82,10 @@ public:
     // The market as the strategy sees it (delayed by feed latency)
     virtual const ObservedBook& book() const = 0;
 
+    // False during the run's warm-up: the strategy sees the market but may not send, cancel, amend or
+    // replace (those calls throw std::logic_error). Timers are allowed.
+    virtual bool can_trade() const = 0;
+
     // Sends a new order; returns its ID. Validation happens at the exchange: a bad order comes back REJECTED.
     virtual OrderId send(Side side, OrderType type, Price price, Quantity quantity,
                          StpPolicy stp = StpPolicy::CANCEL_MAKER) = 0;

@@ -255,7 +255,8 @@ BlockSprint/
 │   │   └── matching_engine.hpp/.cpp # Instantiable engine: books per symbol, clock, callbacks
 │   ├── sim/                    # Market simulator (Phase 3, docs/simulator_architecture.md):
 │   │                           #   RNG, event queue, .bse reader, reconstruction, synthesizer,
-│   │                           #   queue models, bs_sim CLI
+│   │                           #   queue models, latency, observed book, strategy
+│   │                           #   gateway, simulator loop, bs_sim CLI
 │   ├── api/
 │   │   └── api_server.hpp/.cpp # HTTP REST and WebSocket router endpoints
 │   ├── logger.hpp              # Thread-safe file logger (levels, per-run files)

@@ -62,8 +62,10 @@ public:
     const ObservedBook& book() const override { return book_; }
     const Account& account() const override { return known_account_; }
     const std::map<OrderId, OpenOrder>& open_orders() const override { return known_orders_; }
+    bool can_trade() const override { return now() >= gw_.trading_from_; }
 
     OrderId send(Side side, OrderType type, Price price, Quantity quantity, StpPolicy stp) override {
+        require_trading("send");
         Request r;
         r.type = Request::Type::NEW;
         r.order_id = cfg_.owner + "-" + std::to_string(++order_seq_);
@@ -88,6 +90,7 @@ public:
     }
 
     void cancel(const OrderId& id) override {
+        require_trading("cancel");
         Request r;
         r.type = Request::Type::CANCEL;
         r.order_id = id;
@@ -97,6 +100,7 @@ public:
     }
 
     void amend(const OrderId& id, Quantity new_total, std::optional<Price> new_price) override {
+        require_trading("amend");
         Request r;
         r.type = Request::Type::AMEND;
         r.order_id = id;
@@ -107,6 +111,7 @@ public:
     }
 
     void replace(const OrderId& id, Price price, Quantity quantity) override {
+        require_trading("replace");
         Request r;
         r.type = Request::Type::REPLACE;
         r.order_id = id;
@@ -218,6 +223,8 @@ public:
         gw_.queue_.push(feed_.arrival(now()), EventClass::STRATEGY_MD, SimEvent{index_, batch});
     }
 
+    void observe(const Batch& batch) { book_.apply(batch, now()); }
+
     // ---- exchange side ----
     void arrive(const Request& r) {
         const uint64_t t = now();
@@ -311,6 +318,13 @@ public:
     }
 
 private:
+    void require_trading(const char* what) const {
+        if (!can_trade()) {
+            throw std::logic_error("strategy '" + cfg_.owner + "': " + what + " during the warm-up (trading starts at " +
+                                   std::to_string(gw_.trading_from_) + " ns); check ctx.can_trade()");
+        }
+    }
+
     void mark_pending(const OrderId& id, OrderStatus status) {
         if (auto it = known_orders_.find(id); it != known_orders_.end()) {
             it->second.status = status;
@@ -448,6 +462,12 @@ void SimGateway::end() {
 void SimGateway::publish(const Batch& batch) {
     for (auto& s : sessions_) {
         s->publish(batch);
+    }
+}
+
+void SimGateway::observe(const Batch& batch) {
+    for (auto& s : sessions_) {
+        s->observe(batch);
     }
 }
 

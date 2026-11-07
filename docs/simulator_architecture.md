@@ -182,6 +182,26 @@ on_end; recorder.close (run_meta.json)
 
 Fills of resting strategy orders caused by market data (a trade consumed the queue ahead) produce exec reports during the `MARKET_DATA` event; those are routed with ack latency like any other.
 
+**As built (P3.11, `src/sim/simulator.*`).** `Simulator(bse_path, SimulatorOptions{from_ns, to_ns, warmup_ns, tie_break, queue_model, seed})` builds the engine (symbol spec from the file header, `thread_safe = false`, `report_market_data_liquidity = false`), the queue model (its RNG is the `queue` stream of the seed), the synthesizer and the gateway. Strategies are added with `add_strategy(strategy, SessionConfig)`, then `run()` (once):
+
+| Phase | Data time | What happens |
+| :--- | :--- | :--- |
+| Fast-forward | before `from` | batches go to the synthesizer and straight into the observed books (`SimGateway::observe`): no latency, no callbacks. The run starts with a book already in sync, without replaying the hours before it through the strategy |
+| Window | `[from, to)` | `on_start` at `from` (before any data at that time), then the event loop. Data is pushed one batch at a time at its `ts_local` |
+| Warm-up | `[from, from + warmup)` | strategies get every callback but `ctx.can_trade()` is false: `send`/`cancel`/`amend`/`replace` throw `std::logic_error`. Timers are allowed |
+| End | `to` | events at or after `to` are dropped (counted); `on_end` at `to` |
+
+- Defaults: `from = 0` starts at the first batch; `to = 0` ends just after the last batch (the strategies' events at the last data time still run, later deliveries are dropped).
+- `tie_break`: `EventQueue(TieBreak::ORDERS_FIRST)` swaps the first two classes, so an order arriving at the same nanosecond as data meets the old book. Tested with an IOC whose liquidity is pulled at its arrival time: data first, no fill; orders first, filled.
+- A `ts_local` that goes backwards is clamped to the last data time, so simulation time never decreases.
+- `set_sampler(every_ns, fn)` calls `fn(t)` at `from`, `from + every`, … before the events at that time, with the clock at `t` (the recorder's BBO and position samples, P3.13).
+- `stats()`: window times, fast-forward and window batches, events by class, dropped events, whether data was left.
+
+On the real data (BTCUSDT 2026-11-05, one strategy joining both sides with 0.001 BTC, 2 ms feed and ack, lognormal entry 3 ms):
+- **02:00–03:00 UTC:** 354k batches fast-forwarded, 159k in the window, 332k events, 2,207 orders, 6,769 maker fills. Two runs gave identical results.
+- **Whole day:** 2.95M batches, 6.1M events, 37 s.
+- **10:00–11:00 UTC is empty:** the recorder has a gap there (the file has 2 gaps). The run correctly processes no events in that window.
+
 ### 5.4 Sequence of one passive fill
 
 ```mermaid
@@ -420,6 +440,7 @@ class Context {   // what a strategy may do and know
 public:
     uint64_t now() const;  const std::string& symbol() const;  const std::string& owner() const;
     const ObservedBook& book() const;                               // delayed by feed latency
+    bool can_trade() const;                                         // false during the warm-up (P3.11)
     OrderId send(Side, OrderType, Price, Quantity, StpPolicy = StpPolicy::CANCEL_MAKER);
     void cancel(const OrderId&);
     void amend(const OrderId&, Quantity new_total, std::optional<Price> = std::nullopt);
@@ -597,7 +618,8 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.9 | Observed book | done |
 | P3.14 (part) | `bs_sim info`, `reconstruct`, `synth`, `latency` | done |
 | P3.10 | Strategy interface, gateway (latency, Binance limits, routing), two accounts per strategy; golden (e) | done |
-| P3.11–P3.13 | Loop, config, recorder | next |
+| P3.11 | Simulator loop: fast-forward, window, warm-up, tie-break, sampler | done |
+| P3.12–P3.13 | Config, recorder | next |
 | P3.15–P3.18 | Reference strategies, golden scenarios, cross-platform determinism, benchmarks | after |
 
 ---
@@ -630,12 +652,14 @@ src/sim/
   observed_book.hpp/.cpp  the strategy's delayed L2 view (P3.9)
   strategy.hpp            Strategy, Context, Account, OpenOrder, RequestReject (P3.10)
   gateway.hpp/.cpp        sessions: latency channels, limits, routing, accounts (P3.10)
-  simulator.*             (P3.11)  config.* (P3.12)          recorder.* (P3.13)
+  simulator.hpp/.cpp      the event loop: fast-forward, window, warm-up, tie-break, sampler (P3.11)
+  config.* (P3.12)        recorder.* (P3.13)
   strategies/             (P3.15)
   main.cpp                bs_sim CLI
 tests/sim/                doctest: rng, event queue, replayer, reconstruction, queue models, synthesizer
                           (golden scenarios, random-stream invariants), latency, observed book, gateway
-                          (golden e, limits, amend/replace/cancel, timers, two strategies, FIFO); golden/ (P3.16)
+                          (golden e, limits, amend/replace/cancel, timers, two strategies, FIFO), simulator
+                          (window, warm-up, end of data, tie-break, determinism); golden/ (P3.16)
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)
 ```
@@ -653,6 +677,8 @@ CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable
 - **Trade-through fills:** a strategy order priced better than a historical trade is filled by it, up to the trade's quantity.
 - **`ts_local` includes this PC's network delay.** Recordings from a Tokyo VPS give more realistic timing (see [recorder_ops.md](recorder_ops.md)).
 - **Gaps:** no matching against the book during a gap; trades during gaps are informational.
+- **Fast-forward skips latency:** before the window's start the observed books are updated at once, so at `from` the strategy's book is current rather than one feed latency old.
+- **The run stops at `to`:** orders still open stay open (they are part of the final state), and reports in flight are dropped.
 - **One symbol per run in P3.** Multi-symbol runs (shared account, cross-symbol strategies) are an extension (§20).
 
 ## 20. Extension points
