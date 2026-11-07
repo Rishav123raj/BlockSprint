@@ -114,6 +114,7 @@ if(BLOCKSPRINT_BUILD_SIM)
         src/sim/replayer.cpp
         src/sim/reconstruct.cpp
         src/sim/synthesizer.cpp
+        src/sim/observed_book.cpp
     )
     target_include_directories(sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/sim)
     target_link_libraries(sim PUBLIC engine_core)
@@ -129,6 +130,7 @@ if(BLOCKSPRINT_BUILD_SIM)
             tests/sim/rng_queue_test.cpp
             tests/sim/replay_test.cpp
             tests/sim/synthesizer_test.cpp
+            tests/sim/latency_observed_test.cpp
         )
         target_include_directories(sim_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest)
         target_link_libraries(sim_tests PRIVATE sim)

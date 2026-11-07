@@ -370,9 +370,29 @@ Default: `CancelFromBack`. Results must be reported with a sensitivity sweep ove
 | entry | strategy sends → exchange receives | orders meet the book as it is on arrival |
 | ack | exchange → strategy learns of a report | the strategy keeps quoting on fills it doesn't know about yet |
 
-Models: `Constant(μ)`, `Normal(μ, σ)` and `LogNormal` (clamped at ≥ 0), and `Empirical(file)`, an inverse CDF sampled from recorded latencies. Each draws from the run's `Rng`. Requests from one strategy connection never overtake each other: `arrival = max(send + sample, previous arrival)`, and the same holds for acks.
+Models (P3.8, `src/sim/latency_models.hpp`), configured in microseconds:
 
-**Observed book:** each strategy has its own L2 view, updated by `STRATEGY_MD` events. Each event carries the batch's level changes and is delivered at `t + feed`. The strategy reads only this view (`best_bid`, `best_ask`, `level(px)`, `top(n)`); it never touches the engine's book.
+| Config | Delay |
+| :--- | :--- |
+| `{"model": "constant", "us": 2000}` | fixed |
+| `{"model": "normal", "mean_us": 3000, "sd_us": 500}` | normal |
+| `{"model": "lognormal", "median_us": 3000, "sigma": 0.4}` | median × e^(σ·N(0,1)): right-skewed, like network delay |
+| `{"model": "empirical", "file": "lat.txt", "unit": "us"}` | inverse CDF of recorded values (one per line, `#` comments), interpolated |
+
+Every model takes `min_us` (default 0) and `max_us`, and clamps to them.
+
+**Channels.** A `LatencyChannel` is one direction of one strategy connection (feed, entry or ack). Messages on it never overtake each other: `arrival = max(send + sample, previous arrival)`, as on a TCP connection; `held_back()` counts how often that applied. Each channel draws from its **own** `Rng` stream, `stream_rng(seed, "entry/S1")` (the name hashed with FNV-1a, mixed with the seed through SplitMix64). Adding a strategy, or changing one channel's model, then leaves every other channel's samples unchanged. Streams are pinned against an independent Python implementation, and lognormal samples are pinned identically on MSVC and GCC.
+
+**Measuring delays: `bs_sim latency`.** It prints `ts_local − ts_exch` per trade or depth event. On this PC on 2026-11-05 the raw values ran from −300 ms to +1300 ms (BTCUSDT): the PC's clock drifts against Binance's by more than a second over the day, so raw values are not latencies. The command therefore also measures each message against the fastest one of its window (default 60 s) and writes those values for the empirical model:
+
+| 2026-11-05 | p10 | p50 | p90 | p99 |
+| :--- | :--- | :--- | :--- | :--- |
+| BTCUSDT depth, above fastest | 0.7 ms | 1.4 ms | 4.2 ms | 107 ms |
+| BTCUSDT trades, above fastest | 2.9 ms | 8.4 ms | 29 ms | 256 ms |
+
+This is jitter above the best case; the best case itself (this PC to Binance in Tokyo) is unknown without a synchronized clock. The p99 tail mixes real stalls with clock steps inside a window. Calibrated profiles come from a VPS with a synchronized clock and from live parity (P7.6).
+
+**Observed book** (P3.9, `src/sim/observed_book.*`): each strategy has its own L2 view. A `STRATEGY_MD` event carries the data batch itself (a pointer range into the memory-mapped file, so nothing is copied) and is delivered at `t + feed`. `ObservedBook::apply` uses the reconstruction rules, so after the same batches it equals the Reconstructor's book (tested). The strategy reads only this view: `valid()`, `best_bid()`, `best_ask()`, `qty(side, px)`, `top(side, n)`, `last_trade()`, `data_time()` (the market time it shows) and `seen_at()`; prices and quantities are in 1e-8 units. It never touches the engine's book, so it shows neither the strategy's own orders nor the impact of its taker fills, just as a live strategy sees the exchange feed.
 
 ---
 
@@ -473,6 +493,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 | `bs_sim info FILE.bse` | header, record counts by kind, time range, batches, segments |
 | `bs_sim reconstruct FILE.bse [--top N] [--every K] [--at TS]... [--out dump.csv]` | replay data only and dump top-N levels at checkpoints (V0) |
 | `bs_sim synth FILE.bse [--model M] [--compare-every K] [--top N] [--check-every K]` | replay through the synthesizer into the engine with no strategy; compare its top N with the data, check invariants (§8.6) |
+| `bs_sim latency FILE.bse [--kind trade\|depth] [--window-s S] [--out VALUES.txt]` | `ts_local − ts_exch` percentiles, raw and above the fastest of each window; writes values for the empirical latency model (§10) |
 | `bs_sim run CONFIG.json [--set key=value]...` | a full simulation |
 
 ---
@@ -532,8 +553,10 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.5 | Reconstruction mode + V0 vs oracle | done |
 | P3.6 | Synthesizer (L2 → L3), golden scenarios (a), (b), (c), (d), (f), (g) at engine level | done |
 | P3.7 | Queue models (five) | done |
-| P3.14 (part) | `bs_sim info`, `bs_sim reconstruct`, `bs_sim synth` | done |
-| P3.8–P3.13 | Latency models, observed book, gateway/strategy, loop, config, recorder | next |
+| P3.8 | Latency models, FIFO channels, per-channel RNG streams | done |
+| P3.9 | Observed book | done |
+| P3.14 (part) | `bs_sim info`, `reconstruct`, `synth`, `latency` | done |
+| P3.10–P3.13 | Gateway/strategy, loop, config, recorder | next |
 | P3.15–P3.18 | Reference strategies, golden scenarios, cross-platform determinism, benchmarks | after |
 
 ---
@@ -562,13 +585,14 @@ src/sim/
   reconstruct.hpp/.cpp    reconstruction mode: checkpoints, top-N dumps
   queue_models.hpp        five cancel-placement models (P3.7)
   synthesizer.hpp/.cpp    L2 -> L3 into the engine; consistency checks (P3.6)
-  latency_models.hpp      (P3.8)
-  observed_book.*         (P3.9)   gateway.*, strategy.hpp (P3.10)
+  latency_models.hpp      constant/normal/lognormal/empirical, FIFO channels, stream_rng (P3.8)
+  observed_book.hpp/.cpp  the strategy's delayed L2 view (P3.9)
+  gateway.*, strategy.hpp (P3.10)
   simulator.*             (P3.11)  config.* (P3.12)          recorder.* (P3.13)
   strategies/             (P3.15)
   main.cpp                bs_sim CLI
 tests/sim/                doctest: rng, event queue, replayer, reconstruction, queue models, synthesizer
-                          (golden scenarios, random-stream invariants); golden/ (P3.16)
+                          (golden scenarios, random-stream invariants), latency, observed book; golden/ (P3.16)
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)
 ```

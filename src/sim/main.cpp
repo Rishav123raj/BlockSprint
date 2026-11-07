@@ -3,11 +3,13 @@
 //   bs_sim info FILE.bse                    header, records and batches by kind, segments, time range
 //   bs_sim reconstruct FILE.bse [options]   replay the book from the data alone; checkpoint dumps for V0
 //   bs_sim synth FILE.bse [options]         replay through the synthesizer into the engine (no strategy)
+//   bs_sim latency FILE.bse [options]       exchange -> recorder delays, for latency models
 //   bs_sim run CONFIG.json                  a full simulation (P3.11, not yet available)
 #include "reconstruct.hpp"
 #include "replayer.hpp"
 #include "synthesizer.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -37,6 +39,9 @@ void usage() {
         "      --compare-every K  compare the engine's top N with the data every K book batches (default 1)\n"
         "      --top N            levels per side compared (default 20)\n"
         "      --check-every K    full consistency check every K book batches (default 0: only at the end)\n"
+        "  bs_sim latency FILE.bse [--kind trade|depth] [--window-s S] [--out VALUES.txt]\n"
+        "      ts_local - ts_exch percentiles, raw and above the fastest of each S-second window (default 60);\n"
+        "      --out writes the latter (us) for an empirical latency model\n"
         "  bs_sim run CONFIG.json   (not available yet: Phase 3, P3.11)\n";
 }
 
@@ -340,6 +345,107 @@ int cmd_synth(const std::string& path, const std::vector<std::string>& args) {
     return violations.empty() ? 0 : 1;
 }
 
+
+// Delays between Binance's timestamp and the recorder's receipt (ts_local - ts_exch) of one record kind (P3.8).
+// The raw values include this machine's clock offset to Binance, which drifts by hundreds of ms over a day
+// on a PC. So each value is also taken relative to the fastest message of its window (default 60 s): what
+// remains is the delay above the best case, the jitter a latency model needs. --out writes those values
+// (microseconds, one per line) for an empirical model.
+int cmd_latency(const std::string& path, const std::vector<std::string>& args) {
+    std::string kind = "trade";
+    std::string out_path;
+    int64_t window_ns = 60LL * 1000000000LL;
+    for (size_t i = 0; i < args.size(); ++i) {
+        auto value = [&]() -> const std::string& {
+            if (i + 1 >= args.size()) {
+                throw std::invalid_argument(args[i] + " needs a value");
+            }
+            return args[++i];
+        };
+        if (args[i] == "--kind") {
+            kind = value();
+        } else if (args[i] == "--window-s") {
+            window_ns = std::stoll(value()) * 1000000000LL;
+            if (window_ns <= 0) {
+                throw std::invalid_argument("--window-s must be positive");
+            }
+        } else if (args[i] == "--out") {
+            out_path = value();
+        } else {
+            throw std::invalid_argument("unknown option " + args[i]);
+        }
+    }
+    uint8_t wanted = 0;
+    if (kind == "trade") {
+        wanted = bse::TRADE;
+    } else if (kind == "depth") {
+        wanted = bse::DELTA;
+    } else {
+        throw std::invalid_argument("--kind must be trade or depth");
+    }
+    Replayer rp(path);
+    std::vector<double> us;
+    std::vector<int64_t> window_of;
+    for (uint64_t i = 0; i < rp.record_count(); ++i) {
+        const auto& r = rp.records()[i];
+        // One value per depth event (its last record), not per level
+        if (r.kind != wanted || (wanted == bse::DELTA && !(r.flags & bse::LAST_IN_BATCH))) {
+            continue;
+        }
+        if (r.flags & bse::TS_CLAMPED) {
+            continue;  // ts_local was raised to keep time monotonic: not a real receipt time
+        }
+        us.push_back(static_cast<double>(r.ts_local - r.ts_exch) / 1000.0);
+        window_of.push_back(r.ts_local / window_ns);
+    }
+    if (us.empty()) {
+        std::cout << "no " << kind << " records\n";
+        return 1;
+    }
+    // Relative to the fastest message of the window (records are in ts_local order, so windows are runs)
+    std::vector<double> above(us.size());
+    for (size_t begin = 0; begin < us.size();) {
+        size_t end = begin;
+        double fastest = us[begin];
+        while (end < us.size() && window_of[end] == window_of[begin]) {
+            fastest = std::min(fastest, us[end++]);
+        }
+        for (size_t i = begin; i < end; ++i) {
+            above[i] = us[i] - fastest;
+        }
+        begin = end;
+    }
+    if (!out_path.empty()) {
+        std::ofstream out(out_path, std::ios::trunc);
+        if (!out) {
+            throw std::runtime_error("can't write " + out_path);
+        }
+        out << "# " << rp.header().symbol << " " << kind << " ts_local - ts_exch above the fastest of its "
+            << window_ns / 1000000000LL << " s window, us\n";
+        char buf[32];
+        for (double v : above) {
+            std::snprintf(buf, sizeof(buf), "%.3f\n", v);
+            out << buf;
+        }
+    }
+    std::printf("%s %s: %zu values, ms\n", rp.header().symbol.c_str(), kind.c_str(), us.size());
+    for (const std::vector<double>* values : {&us, &above}) {
+        std::vector<double> sorted = *values;
+        std::sort(sorted.begin(), sorted.end());
+        auto q = [&](double p) { return sorted[static_cast<size_t>(p * static_cast<double>(sorted.size() - 1))]; };
+        std::printf("  %-14s min %9.3f  p10 %9.3f  p50 %9.3f  p90 %9.3f  p99 %9.3f  p99.9 %9.3f  max %9.3f\n",
+                    values == &us ? "raw" : "above fastest", sorted.front() / 1000, q(0.10) / 1000, q(0.50) / 1000,
+                    q(0.90) / 1000, q(0.99) / 1000, q(0.999) / 1000, sorted.back() / 1000);
+    }
+    std::printf("  (raw includes this machine's clock offset to Binance; \"above fastest\" is per %lld s window)\n",
+                static_cast<long long>(window_ns / 1000000000LL));
+    if (!out_path.empty()) {
+        std::cout << "written to " << out_path << " (empirical model: {\"model\": \"empirical\", \"file\": \""
+                  << out_path << "\", \"unit\": \"us\", \"min_us\": 0})\n";
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -357,6 +463,9 @@ int main(int argc, char** argv) {
         }
         if (args[0] == "synth" && args.size() >= 2) {
             return cmd_synth(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
+        }
+        if (args[0] == "latency" && args.size() >= 2) {
+            return cmd_latency(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
         }
         if (args[0] == "run") {
             std::cerr << "bs_sim run: not available yet (Phase 3, P3.11)\n";

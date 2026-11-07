@@ -260,7 +260,15 @@ build\Release\bs_sim.exe synth data/packed/<dataset>/BTCUSDT.bse --check-every 1
 build\Release\bs_sim.exe synth data/packed/<dataset>/ETHUSDT.bse --model prob_power:2 --compare-every 0   # throughput only
 ```
 
-It prints how often the engine's top 20 per side equals the data after a depth event (above 99.9% on 2026-11-05; the rest are trades the depth stream hasn't reflected yet) and the number of consistency violations, which must be 0 (exit code 1 otherwise).
+`synth` prints how often the engine's top 20 per side equals the data after a depth event (above 99.9% on 2026-11-05; the rest are trades the depth stream hasn't reflected yet) and the number of consistency violations, which must be 0 (exit code 1 otherwise).
+
+Delays from Binance to the recorder, for the simulator's latency models (P3.8):
+
+```powershell
+build\Release\bs_sim.exe latency data/packed/<dataset>/BTCUSDT.bse --kind depth --out btc_depth_latency.txt
+```
+
+The raw `ts_local − ts_exch` includes this PC's clock offset to Binance, which drifts by over a second a day, so the command also reports each value above the fastest of its 60 s window and writes those (µs) for `{"model": "empirical", "file": "btc_depth_latency.txt"}`.
 
 ## 7. Tests
 
