@@ -576,9 +576,9 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 **As built (P3.12, `src/sim/config.*`; example in `configs/sim/example_btc.json`).** `load_run_config(path, overrides)` returns a `RunConfig`: the resolved JSON, the `.bse` path, symbol and SHA-256, `SimulatorOptions`, the strategy's name, params and owner, its three latency models, fees and limits, the output directory and sample interval. `session()` turns it into the gateway's `SessionConfig`.
 
 - **Layers:** defaults < the preset named by `latency_preset` < the file < `--set key.path=value` overrides. The file plus overrides choose the preset, so `--set latency_preset=zero` works.
-  - Objects merge key by key, so `--set latency.entry.median_us=2500` changes one parameter of the preset's model.
+  - Objects merge key by key, so `--set latency.entry.median_us=2500` changes one parameter of the preset's model. An empty object clears: `--set strategy.params={}`.
   - A latency or queue model object that names its `model` replaces the previous model whole. A file's `{"model": "constant", "us": 500}` doesn't inherit a preset's `sigma`.
-  - An override value is parsed as JSON when it is valid JSON, otherwise taken as a string (times, names, paths).
+  - An override value is parsed as JSON when it is valid JSON, otherwise taken as a string (times, names, paths). `null` is taken as the string "null" (the `null` strategy).
 - **Unknown keys are errors** (`unknown key 'window.form'`), including inside latency models. Every other error names its key too.
 - **Defaults:**
   - fees 0.1% / 0.1% (Binance regular); limits 100 per 10 s, 200,000 per day, 200 open;
@@ -608,7 +608,28 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 | `bs_sim synth FILE.bse [--model M] [--compare-every K] [--top N] [--check-every K]` | replay through the synthesizer into the engine with no strategy; compare its top N with the data, check invariants (§8.6) |
 | `bs_sim latency FILE.bse [--kind trade\|depth] [--window-s S] [--out VALUES.txt]` | `ts_local − ts_exch` percentiles, raw and above the fastest of each window; writes values for the empirical latency model (§10) |
 | `bs_sim config CONFIG.json [--set key=value]...` | print the resolved config, plus the data file, window and strategy; exits 1 with the key on an error |
-| `bs_sim run CONFIG.json [--set key=value]...` | a full simulation |
+| `bs_sim run CONFIG.json [--set key=value]... [--out DIR] [--force]` | a full simulation; writes the results directory (§12) and prints a summary |
+
+**`bs_sim run` as built (P3.14):**
+1. Resolves the config (§13.1). `--out DIR` is `--set output.dir=DIR`.
+2. Builds the strategy from the registry (`src/sim/strategies/registry.*`). An unknown name or parameter is an error naming the key, before any data is read.
+3. Refuses a directory that already holds a run's `run_meta.json`, unless `--force`.
+4. Runs the simulator with the recorder attached.
+5. Adds to `run_meta.json`:
+   - `run_inputs` (config, hashes);
+   - `git` (the commit of the source tree, via `git -C`, and whether tracked files were modified);
+   - `run` (command, overrides, wall time, batches per second).
+6. Prints the window, data, orders, fills and the result (position, cash, fees, PnL at the final mark) and the output hash. Exit code 1 on any error.
+
+**Strategy registry:**
+- `make_strategy(name, params)`. P3.14 registers `null`, which never trades: the full loop with no orders, for data checks and benchmarks. P3.15 adds the reference strategies.
+- Parameters are read through `StrategyParams` (`strategies/params.hpp`): decimals, integers, milliseconds, strings, flags, each with a default. A key no getter asked for is an error: `strategy.params.size: unknown parameter for 'null' (it takes none)`.
+
+**Override fixes found while testing `bs_sim run`:**
+- `--set strategy.name=null` used to parse as JSON `null`, so a JSON `null` value is now taken as the string `"null"`.
+- `--set strategy.params={}` used to merge into the existing params and change nothing, so an empty object now clears.
+
+**On the real data:** BTCUSDT 02:00–03:00 UTC with `null`, 1 s samples: 6.0–6.6 s, including fast-forwarding the 2 hours before. The MSVC and GCC builds of `bs_sim` give the **same output hash** (`805de2b3…`). This is a first cross-compiler check, ahead of P3.17.
 
 ---
 
@@ -669,12 +690,12 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.7 | Queue models (five) | done |
 | P3.8 | Latency models, FIFO channels, per-channel RNG streams | done |
 | P3.9 | Observed book | done |
-| P3.14 (part) | `bs_sim info`, `reconstruct`, `synth`, `latency` | done |
+| P3.14 | `bs_sim info`, `reconstruct`, `synth`, `latency`, `config`, `run`; strategy registry (`null`) | done |
 | P3.10 | Strategy interface, gateway (latency, Binance limits, routing), two accounts per strategy; golden (e) | done |
 | P3.11 | Simulator loop: fast-forward, window, warm-up, tie-break, sampler | done |
 | P3.12 | Run config: layers, latency presets, overrides, dataset resolution; `bs_sim config` | done |
 | P3.13 | Result recorder: five CSVs, run_meta.json, output hash (SHA-256) | done |
-| P3.14 | `bs_sim run` | next |
+| P3.15 | Reference strategies | next |
 | P3.15–P3.18 | Reference strategies, golden scenarios, cross-platform determinism, benchmarks | after |
 
 ---
@@ -711,13 +732,15 @@ src/sim/
   config.hpp/.cpp         run config: defaults, latency presets, overrides, dataset, times (P3.12)
   recorder.hpp/.cpp       CSV outputs, run_meta.json, output hash; run_inputs (P3.13)
   sha256.hpp              SHA-256 for config, manifest and output hashes (P3.13)
-  strategies/             (P3.15)
+  strategies/             registry.hpp/.cpp (make_strategy; null), params.hpp (StrategyParams) (P3.14);
+                          reference strategies (P3.15)
   main.cpp                bs_sim CLI
 tests/sim/                doctest: rng, event queue, replayer, reconstruction, queue models, synthesizer
                           (golden scenarios, random-stream invariants), latency, observed book, gateway
                           (golden e, limits, amend/replace/cancel, timers, two strategies, FIFO), simulator
                           (window, warm-up, end of data, tie-break, determinism), config, recorder
-                          (golden e rows, SHA-256 vectors, output hashes); sim_helpers.hpp; golden/ (P3.16)
+                          (golden e rows, SHA-256 vectors, output hashes), strategies (registry, params);
+                          sim_helpers.hpp; golden/ (P3.16)
 configs/sim/              example run configs
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)

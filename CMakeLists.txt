@@ -119,6 +119,7 @@ if(BLOCKSPRINT_BUILD_SIM)
         src/sim/simulator.cpp
         src/sim/config.cpp
         src/sim/recorder.cpp
+        src/sim/strategies/registry.cpp
     )
     target_include_directories(sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/sim)
     target_link_libraries(sim PUBLIC engine_core)
@@ -126,6 +127,8 @@ if(BLOCKSPRINT_BUILD_SIM)
 
     add_executable(bs_sim src/sim/main.cpp)
     target_link_libraries(bs_sim PRIVATE sim)
+    # bs_sim run records the commit it was run from (git -C <source dir>)
+    target_compile_definitions(bs_sim PRIVATE BLOCKSPRINT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     blocksprint_warnings(bs_sim)
 
     if(BLOCKSPRINT_BUILD_TESTS)
@@ -139,6 +142,7 @@ if(BLOCKSPRINT_BUILD_SIM)
             tests/sim/simulator_test.cpp
             tests/sim/config_test.cpp
             tests/sim/recorder_test.cpp
+            tests/sim/strategies_test.cpp
         )
         target_include_directories(sim_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest)
         target_link_libraries(sim_tests PRIVATE sim)

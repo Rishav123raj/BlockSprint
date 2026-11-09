@@ -60,7 +60,8 @@ bool is_model_path(const std::string& path) {
 }
 
 void merge(json& base, const json& patch, const std::string& path) {
-    if (!patch.is_object() || !base.is_object() || (is_model_path(path) && patch.contains("model"))) {
+    // An empty object clears (e.g. --set strategy.params={}); a model object naming its model replaces the old one
+    if (!patch.is_object() || !base.is_object() || patch.empty() || (is_model_path(path) && patch.contains("model"))) {
         base = patch;
         return;
     }
@@ -82,8 +83,8 @@ json override_patch(const std::string& text) {
     const std::string path = text.substr(0, eq);
     const std::string raw = text.substr(eq + 1);
     json value = json::parse(raw, nullptr, false);
-    if (value.is_discarded()) {
-        value = raw;  // not JSON: a plain string (a time, a name, a path)
+    if (value.is_discarded() || value.is_null()) {
+        value = raw;  // not JSON, or "null" (never a useful setting): a plain string (a time, a name, a path)
     }
     json patch = json::object();
     json* at = &patch;

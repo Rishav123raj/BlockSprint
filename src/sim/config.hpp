@@ -3,8 +3,9 @@
 //
 // Layers, later ones win:  built-in defaults < latency preset (named by "latency_preset") < config file
 //                          < --set key.path=value overrides
-// Objects merge key by key; a latency model or queue model object that names its "model" replaces the
-// previous one whole (so a preset's lognormal parameters don't leak into a file's constant model).
+// Objects merge key by key, and an empty object clears (--set strategy.params={}). A latency model or queue
+// model object that names its "model" replaces the previous one whole (so a preset's lognormal parameters
+// don't leak into a file's constant model).
 // Unknown keys are errors, so a typo can't silently fall back to a default.
 //
 // The resolved document (every layer applied, times normalized to ns-precision UTC) is what a run records

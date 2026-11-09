@@ -5,10 +5,13 @@
 //   bs_sim synth FILE.bse [options]         replay through the synthesizer into the engine (no strategy)
 //   bs_sim latency FILE.bse [options]       exchange -> recorder delays, for latency models
 //   bs_sim config CONFIG.json [--set k=v]   the resolved run config (defaults, preset, file, overrides)
-//   bs_sim run CONFIG.json                  a full simulation (P3.14, not yet available)
+//   bs_sim run CONFIG.json [options]        a full simulation: config -> simulator + strategy -> results dir
 #include "config.hpp"
 #include "reconstruct.hpp"
+#include "recorder.hpp"
 #include "replayer.hpp"
+#include "simulator.hpp"
+#include "strategies/registry.hpp"
 #include "synthesizer.hpp"
 
 #include <algorithm>
@@ -16,6 +19,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -46,7 +50,10 @@ void usage() {
         "      --out writes the latter (us) for an empirical latency model\n"
         "  bs_sim config CONFIG.json [--set KEY.PATH=VALUE]...\n"
         "      print the resolved run config: defaults < latency preset < file < --set overrides\n"
-        "  bs_sim run CONFIG.json   (not available yet: Phase 3, P3.14)\n";
+        "  bs_sim run CONFIG.json [--set KEY.PATH=VALUE]... [--out DIR] [--force]\n"
+        "      run a simulation and write its results (orders, exec_reports, request_rejects, bbo_samples,\n"
+        "      positions CSVs, run_meta.json, output_hash) to output.dir, or DIR\n"
+        "      --force      replace the results of an earlier run in that directory\n";
 }
 
 int64_t parse_time(const std::string& text) { return static_cast<int64_t>(parse_time_ns(text)); }
@@ -440,6 +447,117 @@ int cmd_config(const std::string& path, const std::vector<std::string>& args) {
     return 0;
 }
 
+// stdout of a shell command, trailing newlines removed; empty if it can't run
+std::string capture(const std::string& command) {
+#if defined(_WIN32)
+    FILE* pipe = _popen((command + " 2>NUL").c_str(), "r");
+#else
+    FILE* pipe = popen((command + " 2>/dev/null").c_str(), "r");
+#endif
+    if (!pipe) {
+        return "";
+    }
+    std::string out;
+    char buf[256];
+    while (std::fgets(buf, sizeof(buf), pipe)) {
+        out += buf;
+    }
+#if defined(_WIN32)
+    _pclose(pipe);
+#else
+    pclose(pipe);
+#endif
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r')) {
+        out.pop_back();
+    }
+    return out;
+}
+
+// The commit the binary was run from (the source tree when built with CMake, else the current directory)
+// and whether tracked files had uncommitted changes
+nlohmann::json git_info() {
+#ifdef BLOCKSPRINT_SOURCE_DIR
+    const std::string dir = BLOCKSPRINT_SOURCE_DIR;
+#else
+    const std::string dir = ".";
+#endif
+    const std::string git = "git -C \"" + dir + "\" ";
+    const std::string sha = capture(git + "rev-parse HEAD");
+    if (sha.size() != 40) {
+        return nlohmann::json{{"sha", "unknown"}};
+    }
+    return nlohmann::json{{"sha", sha}, {"dirty", !capture(git + "status --porcelain --untracked-files=no").empty()}};
+}
+
+int cmd_run(const std::string& path, const std::vector<std::string>& args) {
+    std::vector<std::string> overrides;
+    bool force = false;
+    for (size_t i = 0; i < args.size(); ++i) {
+        if (args[i] == "--set" && i + 1 < args.size()) {
+            overrides.push_back(args[++i]);
+        } else if (args[i] == "--out" && i + 1 < args.size()) {
+            overrides.push_back("output.dir=" + nlohmann::json(args[++i]).dump());
+        } else if (args[i] == "--force") {
+            force = true;
+        } else {
+            throw std::invalid_argument("unknown option " + args[i]);
+        }
+    }
+    const RunConfig rc = load_run_config(path, overrides);
+    auto strategy = make_strategy(rc.strategy_name, rc.strategy_params);
+    if (!force && std::filesystem::exists(std::filesystem::path(rc.output_dir) / "run_meta.json")) {
+        throw std::invalid_argument("results of an earlier run are in " + rc.output_dir +
+                                    " (--force to replace them, or --out DIR)");
+    }
+
+    Simulator sim(rc.bse_path, rc.sim);
+    const uint32_t s = sim.add_strategy(*strategy, rc.session());
+    ResultRecorder recorder(sim, rc.output_dir, rc.sample_ns);
+    std::cerr << "run       " << rc.strategy_name << " on " << rc.symbol << ", "
+              << (rc.sim.from_ns ? format_time_ns(rc.sim.from_ns) : std::string("file start")) << " .. "
+              << (rc.sim.to_ns ? format_time_ns(rc.sim.to_ns) : std::string("file end")) << "\n";
+    const auto t0 = std::chrono::steady_clock::now();
+    sim.run();
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+    const SimStats& st = sim.stats();
+    uint64_t events = 0;
+    for (uint64_t n : st.events) {
+        events += n;
+    }
+    // Throughput over every batch read, fast-forwarded or not: the wall time covers both
+    const uint64_t batches = st.fast_forward_batches + st.data_batches;
+    const double batches_per_s = secs > 0 ? static_cast<double>(batches) / secs : 0.0;
+    nlohmann::json meta = run_inputs(rc);
+    meta["git"] = git_info();
+    meta["run"] = {{"command", "bs_sim run " + path}, {"overrides", overrides}, {"wall_seconds", secs},
+                   {"batches_per_second", batches_per_s}};
+    const nlohmann::json out = recorder.finish(meta);
+
+    const SessionStats ss = sim.gateway().stats(s);
+    const Account& a = sim.gateway().exchange_account(s);
+    const nlohmann::json& acct = out["sessions"][s]["exchange_account"];
+    std::printf("window    %s .. %s (warm-up to %s)\n", format_time_ns(st.start_ns).c_str(),
+                format_time_ns(st.end_ns).c_str(), format_time_ns(st.trading_ns).c_str());
+    std::printf("data      %llu batches fast-forwarded, %llu in the window (%llu events); %.2f s, %.2f M batches/s\n",
+                static_cast<unsigned long long>(st.fast_forward_batches),
+                static_cast<unsigned long long>(st.data_batches), static_cast<unsigned long long>(events), secs,
+                batches_per_s / 1e6);
+    std::printf("orders    %llu sent, %llu cancels, %llu amends, %llu replaces; %llu rate-limited, %llu refused\n",
+                static_cast<unsigned long long>(ss.orders_sent), static_cast<unsigned long long>(ss.cancels_sent),
+                static_cast<unsigned long long>(ss.amends_sent), static_cast<unsigned long long>(ss.replaces_sent),
+                static_cast<unsigned long long>(ss.rate_limited + ss.open_limited),
+                static_cast<unsigned long long>(ss.request_rejects));
+    std::printf("fills     %llu (%llu maker, %llu taker), volume %s %s\n", static_cast<unsigned long long>(a.fills),
+                static_cast<unsigned long long>(a.maker_fills), static_cast<unsigned long long>(a.taker_fills),
+                format_fixed(a.base_volume).c_str(), rc.symbol.c_str());
+    std::printf("result    position %s, cash %s, fees %s, PnL %s at mark %s\n", acct["position"].get<std::string>().c_str(),
+                acct["cash"].get<std::string>().c_str(), acct["fees"].get<std::string>().c_str(),
+                acct["pnl"].get<std::string>().c_str(), out["final_mark"].get<std::string>().c_str());
+    std::printf("output    %s  (output_hash %s)\n", rc.output_dir.c_str(), recorder.output_hash().c_str());
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -464,9 +582,8 @@ int main(int argc, char** argv) {
         if (args[0] == "config" && args.size() >= 2) {
             return cmd_config(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
         }
-        if (args[0] == "run") {
-            std::cerr << "bs_sim run: not available yet (Phase 3, P3.11)\n";
-            return 2;
+        if (args[0] == "run" && args.size() >= 2) {
+            return cmd_run(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
         }
         usage();
         return 2;

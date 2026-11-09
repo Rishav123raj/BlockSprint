@@ -270,6 +270,13 @@ build\Release\bs_sim.exe latency data/packed/<dataset>/BTCUSDT.bse --kind depth 
 
 The raw `ts_local − ts_exch` includes this PC's clock offset to Binance, which drifts by over a second a day, so the command also reports each value above the fastest of its 60 s window and writes those (µs) for `{"model": "empirical", "file": "btc_depth_latency.txt"}`.
 
+A simulation run is described by a JSON config (P3.12, example in `configs/sim/`) and writes a results directory (P3.13):
+
+```powershell
+build\Release\bs_sim.exe config configs/sim/example_btc.json --set seed=7        # print the resolved config
+build\Release\bs_sim.exe run configs/sim/example_btc.json --set strategy.name=null --set strategy.params={} --out results/null_btc
+```
+
 ## 7. Tests
 
 ```powershell

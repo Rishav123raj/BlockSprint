@@ -122,6 +122,12 @@ TEST_CASE("precedence: defaults < preset < file < overrides; a model object nami
     Rng rng(1);
     CHECK(rc.ack->sample_ns(rng) == 500000);
 
+    // A value that isn't JSON, or is JSON null, is a string
+    CHECK(resolve_run_config(cfg, {"strategy.name=null"}).strategy_name == "null");
+    CHECK(resolve_run_config(cfg, {"output.dir=results/a b"}).output_dir == "results/a b");
+    // An empty object clears
+    CHECK(resolve_run_config(cfg, {"strategy.params={}"}).strategy_params == json::object());
+
     // An override can choose the preset
     const RunConfig z = resolve_run_config(cfg, {"latency_preset=zero"});
     CHECK(z.resolved["latency"]["entry"] == latency_preset("zero")["entry"]);
