@@ -412,7 +412,7 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 ### Acceptance criteria
 - [x] All golden scenarios pass; V0–V4 pass. V3 on filled volume (PnL reversed for a no-edge strategy); V4 exact on consistent data, measured on real data (docs/simulator_architecture.md §15)
 - [~] Replay-only ≥ 5 M events/s; a one-day BTCUSDT `PassiveQuoter` run finishes in < 30 s (Release). P3.18: replay-only 16.3 M records/s (met); the quoter on the best recorded day (74.65% coverage) 25.1 s, a fully covered day projected at ~34 s (engine work needed)
-- [ ] `bs_sim run` produces a complete output directory with `run_meta.json`.
+- [x] `bs_sim run` produces a complete output directory with `run_meta.json`. (since P3.14; re-checked 2026-11-10: the five CSVs, output_hash and run_meta.json with config, data, git, run, sessions, outputs)
 - [ ] Tag `v2.0.0-p3`.
 
 ### Risks
