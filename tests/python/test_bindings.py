@@ -4,6 +4,7 @@ The run test reuses a pinned scenario of tests/sim/determinism_test.cpp: the Pyt
 output hash as the C++ test, on every platform.
 """
 
+import os
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,18 @@ TWAP_HASH = "4a71b6e682c666e2223c7e2da9c4a8949dacee2fe2a21587ef7dce8e641f0614"
 
 def config(tmp_path, **extra):
     return {**TWAP_CONFIG, "dataset": str(FIXTURE), "output": {**TWAP_CONFIG["output"], "dir": str(tmp_path)}, **extra}
+
+
+@pytest.mark.skipif(os.environ.get("BLOCKSPRINT_EXPECT_INSTALLED") != "1",
+                    reason="CI's wheel test (P4.8) sets BLOCKSPRINT_EXPECT_INSTALLED=1")
+def test_the_installed_wheel_is_what_is_tested():
+    # When CI tests a built wheel, both packages must come from the wheel, not from the source tree
+    import research
+
+    for module in (bs, research):
+        path = Path(module.__file__).resolve()
+        assert "site-packages" in path.parts, path
+        assert ROOT not in path.parents, path
 
 
 def test_module_basics():

@@ -176,6 +176,29 @@ Pass `fixed="float"` for floats (plotting) or `fixed="int"` for the raw integers
 
 **Cost** (BTCUSDT Nov 6, the C++ `PassiveQuoter`, 1 s samples): 365 k rows and 38.6 MB of tables. Keeping them adds about 4% to the run (73.1 s against 70.0 s), and the output hash is unchanged. `to_polars()` takes 1.8 s with decimals and 0.3 s with floats.
 
+## A wheel (P4.8)
+
+```powershell
+uv build --wheel                       # dist/crypto_trading_engine-2.0.0.dev0-cp313-cp313-win_amd64.whl
+```
+
+The wheel holds the compiled `blocksprint_sim` and the `research` package. It reuses `build-py/`, so after a `uv sync` it takes about 35 s. To test it the way CI does, outside the source tree:
+
+```bash
+uv venv wheel-env --python 3.13
+uv pip install --python wheel-env dist/*.whl "pytest>=8.3"
+BLOCKSPRINT_EXPECT_INSTALLED=1 wheel-env/Scripts/pytest -q -o pythonpath= -p no:cacheprovider tests/python
+```
+
+**Run the `pytest` executable, not `python -m pytest`.** The latter puts the current directory first on the import path, so `research` would come from the source tree instead of the wheel. With `BLOCKSPRINT_EXPECT_INSTALLED=1`, a test in `test_bindings.py` fails unless both packages come from `site-packages`.
+
+**CI** (`.github/workflows/ci.yml`, jobs `Python / Windows` and `Python / Linux`) does both on each OS:
+1. `uv sync` and the whole suite (the developer path, on a clean machine);
+2. `uv build --wheel` and the suite again against the wheel in a fresh environment.
+
+The wheels are kept as the run's artifacts (`wheel-Windows`, `wheel-Linux`).
+- **Linux tag:** the Linux wheel is tagged `linux_x86_64`, which is fine for these machines. Publishing it would need a manylinux build (cibuildwheel).
+
 ## Troubleshooting
 
 | Symptom | Fix |
