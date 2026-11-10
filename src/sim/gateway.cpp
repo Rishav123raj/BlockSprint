@@ -89,11 +89,20 @@ public:
         return id;
     }
 
+    // Side and type of the order a cancel / amend / replace is for (for the exchange and the listener)
+    void describe(Request& r) const {
+        if (auto it = known_orders_.find(r.order_id); it != known_orders_.end()) {
+            r.side = it->second.side;
+            r.order_type = it->second.type;
+        }
+    }
+
     void cancel(const OrderId& id) override {
         require_trading("cancel");
         Request r;
         r.type = Request::Type::CANCEL;
         r.order_id = id;
+        describe(r);
         mark_pending(id, OrderStatus::PENDING_CANCEL);
         ++stats_.cancels_sent;
         to_exchange(std::move(r));
@@ -104,6 +113,7 @@ public:
         Request r;
         r.type = Request::Type::AMEND;
         r.order_id = id;
+        describe(r);
         r.quantity = new_total;
         r.new_price = new_price;
         ++stats_.amends_sent;
@@ -117,10 +127,7 @@ public:
         r.order_id = id;
         r.price = price;
         r.quantity = quantity;
-        if (auto it = known_orders_.find(id); it != known_orders_.end()) {
-            r.side = it->second.side;
-            r.order_type = it->second.type;
-        }
+        describe(r);
         r.stp = StpPolicy::CANCEL_MAKER;
         mark_pending(id, OrderStatus::PENDING_REPLACE);
         ++stats_.replaces_sent;

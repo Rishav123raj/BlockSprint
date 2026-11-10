@@ -485,7 +485,43 @@ An account holds:
 
 Notionals use `notional_for` (`fees.hpp`), exact for every Binance spot symbol.
 
-### 11.4 Golden scenario (e): latency picks off a stale quote
+### 11.4 Reference strategies (P3.15)
+
+In `src/sim/strategies/`, registered by name for `strategy.name`:
+
+| Name | What it does | Params (default) |
+| :--- | :--- | :--- |
+| `null` | never trades | none |
+| `passive_quoter` | joins the observed best bid and ask with one post-only quote per side, re-quoting every `refresh_ms` | `size` ("0.001"), `refresh_ms` (500), `max_position` ("0.01"), `post_only` (true) |
+| `twap_taker` | buys or sells `quantity` in `slices` equal MARKET orders over `duration_ms` | `side` ("buy"), `quantity` ("0.01"), `slices` (10), `duration_ms` (600000) |
+
+**PassiveQuoter**, every refresh:
+- a quote at another price than the observed best is replaced (losing its queue place, as on Binance);
+- a side whose next fill would take the position past `max_position` isn't quoted, and its quote is cancelled;
+- while the book is invalid (a gap) both quotes are cancelled, immediately on `on_gap`;
+- a quote with a request in flight is left alone until the answer comes.
+
+It reacts only to its timer and to gaps, so it sends at most 2 requests per refresh.
+
+**TwapTaker:**
+- The schedule starts when the strategy may first trade (after the warm-up); slice *k* is due at start + *k* × duration / slices.
+- By slice *k* the target is quantity × *k* / slices, rounded down to the lot, and the last slice takes the rest. Each slice sends the target minus what is filled or in flight.
+- So quantity a MARKET order couldn't fill (no liquidity, a reject) is retried with the next slice, and after the last slice every interval until filled. Nothing is sent while the book is invalid.
+
+**On the real data** (`configs/sim/example_btc.json`, BTCUSDT 2026-11-05 02:00–08:00, Tokyo latency preset, 0.1% fees):
+
+| | `passive_quoter` (0.001, 500 ms) | `twap_taker` (buy 1 BTC, 60 slices, 1 h) |
+| :--- | :--- | :--- |
+| Orders | 3,847 new, 4,079 replaces, 4 cancels; 3 refused, 0 rate-limited | 60 MARKET |
+| Fills | 17,093, all maker; 3.83 BTC traded | 60 taker; 1.0 BTC |
+| Result at the 08:00 mark | PnL −346.18 USDT, of which fees 308.76 | PnL −403.05 USDT, fees 80.68 |
+| Wall time | 25–28 s (including 2 h fast-forward) | 24 s |
+
+The quoter's result is what a naive join-the-best quoter should show at a 0.1% maker fee: the fees are most of the loss. The MSVC and GCC builds give the same output hash for the quoter run (`1d7b134e…`), and a second run gives it again.
+
+**Gateway fix found by the tests:** cancel and amend requests didn't carry their order's side and type, so `orders.csv` showed every cancel as a buy. They now take them from the order, as replace already did.
+
+### 11.5 Golden scenario (e): latency picks off a stale quote
 
 5 ms feed, entry and ack. Data:
 - t=0: snapshot, bid 100.00 × 5, ask 100.10 × 2;
@@ -622,7 +658,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 6. Prints the window, data, orders, fills and the result (position, cash, fees, PnL at the final mark) and the output hash. Exit code 1 on any error.
 
 **Strategy registry:**
-- `make_strategy(name, params)`. P3.14 registers `null`, which never trades: the full loop with no orders, for data checks and benchmarks. P3.15 adds the reference strategies.
+- `make_strategy(name, params)`. P3.14 registers `null`, which never trades: the full loop with no orders, for data checks and benchmarks. P3.15 adds `passive_quoter` and `twap_taker` (§11.4).
 - Parameters are read through `StrategyParams` (`strategies/params.hpp`): decimals, integers, milliseconds, strings, flags, each with a default. A key no getter asked for is an error: `strategy.params.size: unknown parameter for 'null' (it takes none)`.
 
 **Override fixes found while testing `bs_sim run`:**
@@ -695,8 +731,9 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.11 | Simulator loop: fast-forward, window, warm-up, tie-break, sampler | done |
 | P3.12 | Run config: layers, latency presets, overrides, dataset resolution; `bs_sim config` | done |
 | P3.13 | Result recorder: five CSVs, run_meta.json, output hash (SHA-256) | done |
-| P3.15 | Reference strategies | next |
-| P3.15–P3.18 | Reference strategies, golden scenarios, cross-platform determinism, benchmarks | after |
+| P3.15 | Reference strategies: `passive_quoter`, `twap_taker` (§11.4) | done |
+| P3.16 | Golden scenario tests | next |
+| P3.17–P3.18 | Cross-platform determinism, benchmarks | after |
 
 ---
 
@@ -733,13 +770,14 @@ src/sim/
   recorder.hpp/.cpp       CSV outputs, run_meta.json, output hash; run_inputs (P3.13)
   sha256.hpp              SHA-256 for config, manifest and output hashes (P3.13)
   strategies/             registry.hpp/.cpp (make_strategy; null), params.hpp (StrategyParams) (P3.14);
-                          reference strategies (P3.15)
+                          passive_quoter.hpp/.cpp, twap_taker.hpp/.cpp (P3.15)
   main.cpp                bs_sim CLI
 tests/sim/                doctest: rng, event queue, replayer, reconstruction, queue models, synthesizer
                           (golden scenarios, random-stream invariants), latency, observed book, gateway
                           (golden e, limits, amend/replace/cancel, timers, two strategies, FIFO), simulator
                           (window, warm-up, end of data, tie-break, determinism), config, recorder
-                          (golden e rows, SHA-256 vectors, output hashes), strategies (registry, params);
+                          (golden e rows, SHA-256 vectors, output hashes), strategies (registry, params,
+                          quoter and TWAP runs);
                           sim_helpers.hpp; golden/ (P3.16)
 configs/sim/              example run configs
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle

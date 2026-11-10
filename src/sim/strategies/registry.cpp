@@ -1,6 +1,8 @@
 #include "strategies/registry.hpp"
 
 #include "strategies/params.hpp"
+#include "strategies/passive_quoter.hpp"
+#include "strategies/twap_taker.hpp"
 
 #include <functional>
 #include <map>
@@ -21,6 +23,9 @@ using Factory = std::function<std::unique_ptr<Strategy>(StrategyParams&)>;
 const std::map<std::string, Factory>& factories() {
     static const std::map<std::string, Factory> f{
         {"null", [](StrategyParams&) { return std::make_unique<NullStrategy>(); }},
+        {"passive_quoter",
+         [](StrategyParams& p) { return std::make_unique<PassiveQuoter>(PassiveQuoter::config_from(p)); }},
+        {"twap_taker", [](StrategyParams& p) { return std::make_unique<TwapTaker>(TwapTaker::config_from(p)); }},
     };
     return f;
 }

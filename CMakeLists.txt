@@ -120,6 +120,8 @@ if(BLOCKSPRINT_BUILD_SIM)
         src/sim/config.cpp
         src/sim/recorder.cpp
         src/sim/strategies/registry.cpp
+        src/sim/strategies/passive_quoter.cpp
+        src/sim/strategies/twap_taker.cpp
     )
     target_include_directories(sim PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/sim)
     target_link_libraries(sim PUBLIC engine_core)
