@@ -645,6 +645,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 | `bs_sim latency FILE.bse [--kind trade\|depth] [--window-s S] [--out VALUES.txt]` | `ts_local − ts_exch` percentiles, raw and above the fastest of each window; writes values for the empirical latency model (§10) |
 | `bs_sim config CONFIG.json [--set key=value]...` | print the resolved config, plus the data file, window and strategy; exits 1 with the key on an error |
 | `bs_sim run CONFIG.json [--set key=value]... [--out DIR] [--force]` | a full simulation; writes the results directory (§12) and prints a summary |
+| `bs_sim slice FILE.bse --from T --to T --out OUT.bse` | a self-contained piece of a file: the book at `--from` as one snapshot, then every record until `--to` (test fixtures, P3.17) |
 
 **`bs_sim run` as built (P3.14):**
 1. Resolves the config (§13.1). `--out DIR` is `--set output.dir=DIR`.
@@ -682,6 +683,26 @@ The rules, enforced in review and by tests:
 5. **Outputs in canonical order,** hashed (`output_hash`).
 
 **Tests:** the same run twice in one process, and on MSVC/Windows vs GCC/Linux in CI, gives identical hashes (P3.17, gate V1).
+
+**As built (P3.17):** `tests/sim/determinism_test.cpp` runs three scenarios on a committed one-minute slice of real data, `tests/sim/data/btcusdt_2026-11-05_0200_1m.bse` (BTCUSDT 02:00–02:01 UTC, 29,513 records, 1.1 MB). It goes through `run_simulation` (`src/sim/run.*`), the same call `bs_sim run` makes. Each output hash must equal the value pinned in the test:
+
+| Scenario | Exercises | Fills |
+| :--- | :--- | :--- |
+| quoter, random latency, `prob_power:2`, seed 7 | lognormal and normal latency, a random queue model, the quoter's replace path | 69 |
+| TWAP seller, home-PC preset, `prob_log`, seed 11 | warm-up, `orders_first`, MARKET orders | 12 |
+| quoter, Tokyo preset, `pro_rata`, seed 3 | a window inside the file (fast-forward), plain LIMIT quotes | 82 |
+
+More checks:
+- the fixture's SHA-256 is pinned;
+- the same run twice in one process gives the same hash;
+- **a different seed gives a different hash**, so the randomness reaches the results and the pinned hashes can't be trivially stable;
+- `slice` itself is tested on a hand-built stream with a gap.
+
+MSVC (Windows) and GCC (MinGW, Windows) gave identical hashes before they were pinned. CI runs the suite on Windows/MSVC and Linux/GCC, so both must reproduce them; a "Simulator determinism (V1)" step prints the hashes in each job's log.
+
+When a change is meant to alter results, the failing test prints the new hashes; update them and say why in the commit. A hash that changes on one platform only is a determinism bug.
+
+The fixture comes from `bs_sim slice` (§13.2), which writes the book at `--from` as one synthetic snapshot and then every record up to `--to`. On the real file, the slice rebuilds the full book (about 9,800 levels) identically at 4 times in the window. `.gitattributes` marks `*.bse` as binary.
 
 ---
 
@@ -755,8 +776,8 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P3.13 | Result recorder: five CSVs, run_meta.json, output hash (SHA-256) | done |
 | P3.15 | Reference strategies: `passive_quoter`, `twap_taker` (§11.4) | done |
 | P3.16 | Golden scenarios end to end: `tests/sim/golden/*.golden` through the whole simulator | done |
-| P3.17 | Cross-platform determinism | next |
-| P3.18 | Benchmarks | after |
+| P3.17 | Cross-platform determinism: pinned output hashes on a committed slice, run in CI on MSVC and GCC (§14) | done |
+| P3.18 | Benchmarks | next |
 
 ---
 
@@ -781,7 +802,7 @@ src/sim/
   bse.hpp                 .bse constants, header and record structs
   replayer.hpp/.cpp       header validation, record and batch iteration
   l2_book.hpp             pure L2 book (ticks/lots)
-  reconstruct.hpp/.cpp    reconstruction mode: checkpoints, top-N dumps
+  reconstruct.hpp/.cpp    reconstruction mode: checkpoints, top-N dumps; slice (P3.17)
   queue_models.hpp        five cancel-placement models (P3.7)
   synthesizer.hpp/.cpp    L2 -> L3 into the engine; consistency checks (P3.6)
   latency_models.hpp      constant/normal/lognormal/empirical, FIFO channels, stream_rng (P3.8)
@@ -791,6 +812,7 @@ src/sim/
   simulator.hpp/.cpp      the event loop: fast-forward, window, warm-up, tie-break, sampler (P3.11)
   config.hpp/.cpp         run config: defaults, latency presets, overrides, dataset, times (P3.12)
   recorder.hpp/.cpp       CSV outputs, run_meta.json, output hash; run_inputs (P3.13)
+  run.hpp/.cpp            run_simulation: one run from a resolved config, as bs_sim run (P3.17)
   sha256.hpp              SHA-256 for config, manifest and output hashes (P3.13)
   strategies/             registry.hpp/.cpp (make_strategy; null), params.hpp (StrategyParams) (P3.14);
                           passive_quoter.hpp/.cpp, twap_taker.hpp/.cpp (P3.15)
@@ -801,7 +823,8 @@ tests/sim/                doctest: rng, event queue, replayer, reconstruction, q
                           (window, warm-up, end of data, tie-break, determinism), config, recorder
                           (golden e rows, SHA-256 vectors, output hashes), strategies (registry, params,
                           quoter and TWAP runs);
-                          sim_helpers.hpp; golden_test.cpp + golden/*.golden (P3.16: end-to-end scenarios)
+                          sim_helpers.hpp; golden_test.cpp + golden/*.golden (P3.16: end-to-end scenarios);
+                          determinism_test.cpp + data/btcusdt_2026-11-05_0200_1m.bse (P3.17: pinned hashes)
 configs/sim/              example run configs
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)

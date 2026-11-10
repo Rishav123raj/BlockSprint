@@ -250,6 +250,7 @@ The C++ simulator (Phase 3, [simulator_architecture.md](simulator_architecture.m
 cmake -B build; cmake --build build --config Release --target bs_sim sim_tests
 build\Release\sim_tests.exe                                                           # simulator unit tests
 build\Release\bs_sim.exe info data/packed/<dataset>/BTCUSDT.bse                        # header, batches, segments
+build\Release\bs_sim.exe slice data/packed/<dataset>/BTCUSDT.bse --from 2026-11-05T02:00:00Z --to 2026-11-05T02:01:00Z --out small.bse   # a self-contained piece
 build\Release\bs_sim.exe reconstruct data/packed/<dataset>/BTCUSDT.bse --every 5000 --top 20 --out v0_btc.csv
 uv run python -m research.sim.check_reconstruct --dump v0_btc.csv --symbol BTCUSDT --dates 2026-11-05   # V0 PASS / FAIL
 ```

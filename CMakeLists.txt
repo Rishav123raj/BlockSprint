@@ -119,6 +119,7 @@ if(BLOCKSPRINT_BUILD_SIM)
         src/sim/simulator.cpp
         src/sim/config.cpp
         src/sim/recorder.cpp
+        src/sim/run.cpp
         src/sim/strategies/registry.cpp
         src/sim/strategies/passive_quoter.cpp
         src/sim/strategies/twap_taker.cpp
@@ -146,11 +147,13 @@ if(BLOCKSPRINT_BUILD_SIM)
             tests/sim/recorder_test.cpp
             tests/sim/strategies_test.cpp
             tests/sim/golden_test.cpp
+            tests/sim/determinism_test.cpp
         )
         target_include_directories(sim_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest)
         target_link_libraries(sim_tests PRIVATE sim)
         target_compile_definitions(sim_tests PRIVATE
-            BLOCKSPRINT_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sim/golden")
+            BLOCKSPRINT_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sim/golden"
+            BLOCKSPRINT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sim/data")
         blocksprint_warnings(sim_tests)
         add_test(NAME sim_tests COMMAND sim_tests)
     endif()

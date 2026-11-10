@@ -18,11 +18,13 @@ jobs:
             configure: cmake -B build
             build: cmake --build build --config Release
             test: ctest --test-dir build -C Release --output-on-failure
+            sim_tests: build/Release/sim_tests.exe
           - name: Linux / GCC
             os: ubuntu-latest
             configure: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++
             build: cmake --build build -j 4
             test: ctest --test-dir build --output-on-failure
+            sim_tests: build/sim_tests
 
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +39,12 @@ jobs:
 
       - name: Unit tests
         run: ${{ matrix.test }}
+
+      # P3.17 (V1): the simulator's output hashes on the committed data slice, printed so the logs of the
+      # two platforms can be compared; the test fails unless they equal the pinned values
+      - name: Simulator determinism (V1)
+        shell: bash
+        run: ${{ matrix.sim_tests }} -ts=determinism -s | grep -A4 "output hashes"
 
   fuzz:
     # P1.16: 20 seeds x 50,000 = 10^6 random operations against the reference book (~30 s). Runs on every

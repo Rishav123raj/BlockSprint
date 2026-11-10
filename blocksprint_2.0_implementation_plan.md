@@ -46,6 +46,7 @@
 | 2026-11-10 | Gap placement fix (P2.7) | End-to-end run of Phase 2 over Nov 2-9 and `bs_sim run` over a packed Nov 5-7: no integrity faults, but a GAP row sat at the reconnect, so a replay showed a stale book as live through an outage (Nov 5 12:00 still had the 08:08 BBO; Nov 9 began with a day-start snapshot of the Nov 7 19:30 book). The normalizer now writes GAP rows at the last good update and treats > 10 s without a book update as a gap (`--stale-after-s`); a stream that continues after a silence resumes from the kept book. 2 new tests (43 Python). Data re-normalized and re-packed |
 | 2026-11-10 | P3.15 done | `src/sim/strategies/`: `PassiveQuoter` (`passive_quoter`: one post-only quote per side at the observed best, re-quoted every `refresh_ms` by replace, `max_position`, cancels on a gap) and `TwapTaker` (`twap_taker`: equal MARKET slices over a duration from the end of the warm-up, unfilled quantity carried into the next slice). Gateway: cancel/amend requests now carry the order's side and type (orders.csv showed cancels as buys). `configs/sim/example_btc.json` runs as written: BTCUSDT Nov 5 02:00-08:00, 17,093 maker fills, PnL -346 USDT (fees 309); same output hash on MSVC and GCC. 82 sim tests on MSVC + GCC |
 | 2026-11-10 | P3.16 done | Golden scenarios end to end: one hand-written text file per scenario in `tests/sim/golden/` (market data, the strategy's timed actions, expected reports with exchange and delivery times, engine queues at chosen times, final account), written to a `.bse` file and run through the whole `Simulator` by `tests/sim/golden_test.cpp`. (a)-(g) plus (e) without latency; (b) under cancel_from_back, cancel_from_front and pro_rata. All matched the hand-computed results on the first run; a broken expectation fails with actual vs expected. 84 sim tests on MSVC + GCC |
+| 2026-11-10 | P3.17 done | `tests/sim/determinism_test.cpp`: three scenarios (random latency, prob_power, prob_log, pro_rata, warm-up, orders_first, a window, both strategies) on a committed one-minute BTCUSDT slice (`tests/sim/data/`, 1.1 MB) through `run_simulation` (`src/sim/run.*`, now shared with `bs_sim run`); output hashes pinned, identical on MSVC and GCC before pinning; a different seed changes the hash. `bs_sim slice` (book at --from as one snapshot, then the records; rebuilds the real book identically). CI prints the hashes on Windows/MSVC and Linux/GCC. `.gitattributes`: `*.bse binary`. 89 sim tests |
 
 ---
 
@@ -663,7 +664,7 @@ Tick these off as phases complete.
 - [x] P3.1 Targets  - [x] P3.2 RNG  - [x] P3.3 EventQueue  - [x] P3.4 Reader  - [x] P3.5 Reconstruction (V0 PASS on 2026-11-05)
 - [x] P3.6 Synthesizer  - [x] P3.7 QueueModels  - [x] P3.8 Latency  - [x] P3.9 Observed book
 - [x] P3.10 Gateway/Strategy  - [x] P3.11 Loop  - [x] P3.12 Config  - [x] P3.13 Recorder  - [x] P3.14 CLI (info, reconstruct, synth, latency, config, run)
-- [x] P3.15 C++ strategies  - [x] P3.16 Golden tests  - [ ] P3.17 Cross-OS determinism  - [ ] P3.18 Bench
+- [x] P3.15 C++ strategies  - [x] P3.16 Golden tests  - [x] P3.17 Cross-OS determinism  - [ ] P3.18 Bench
 
 **Phase 4: Python Bridge**
 - [ ] P4.1 pybind11  - [ ] P4.2 scikit-build  - [ ] P4.3 Bindings  - [ ] P4.4 Trampoline/GIL

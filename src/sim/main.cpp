@@ -6,12 +6,12 @@
 //   bs_sim latency FILE.bse [options]       exchange -> recorder delays, for latency models
 //   bs_sim config CONFIG.json [--set k=v]   the resolved run config (defaults, preset, file, overrides)
 //   bs_sim run CONFIG.json [options]        a full simulation: config -> simulator + strategy -> results dir
+//   bs_sim slice FILE.bse --from T --to T --out OUT.bse   a self-contained piece of a file (test fixtures)
 #include "config.hpp"
 #include "reconstruct.hpp"
-#include "recorder.hpp"
 #include "replayer.hpp"
+#include "run.hpp"
 #include "simulator.hpp"
-#include "strategies/registry.hpp"
 #include "synthesizer.hpp"
 
 #include <algorithm>
@@ -53,7 +53,10 @@ void usage() {
         "  bs_sim run CONFIG.json [--set KEY.PATH=VALUE]... [--out DIR] [--force]\n"
         "      run a simulation and write its results (orders, exec_reports, request_rejects, bbo_samples,\n"
         "      positions CSVs, run_meta.json, output_hash) to output.dir, or DIR\n"
-        "      --force      replace the results of an earlier run in that directory\n";
+        "      --force      replace the results of an earlier run in that directory\n"
+        "  bs_sim slice FILE.bse --from TIME --to TIME --out OUT.bse\n"
+        "      the book at --from as one snapshot, then every record until --to: a small file that replays\n"
+        "      on its own (test fixtures)\n";
 }
 
 int64_t parse_time(const std::string& text) { return static_cast<int64_t>(parse_time_ns(text)); }
@@ -504,39 +507,28 @@ int cmd_run(const std::string& path, const std::vector<std::string>& args) {
         }
     }
     const RunConfig rc = load_run_config(path, overrides);
-    auto strategy = make_strategy(rc.strategy_name, rc.strategy_params);
     if (!force && std::filesystem::exists(std::filesystem::path(rc.output_dir) / "run_meta.json")) {
         throw std::invalid_argument("results of an earlier run are in " + rc.output_dir +
                                     " (--force to replace them, or --out DIR)");
     }
-
-    Simulator sim(rc.bse_path, rc.sim);
-    const uint32_t s = sim.add_strategy(*strategy, rc.session());
-    ResultRecorder recorder(sim, rc.output_dir, rc.sample_ns);
     std::cerr << "run       " << rc.strategy_name << " on " << rc.symbol << ", "
               << (rc.sim.from_ns ? format_time_ns(rc.sim.from_ns) : std::string("file start")) << " .. "
               << (rc.sim.to_ns ? format_time_ns(rc.sim.to_ns) : std::string("file end")) << "\n";
-    const auto t0 = std::chrono::steady_clock::now();
-    sim.run();
-    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    nlohmann::json extra;
+    extra["git"] = git_info();
+    extra["run"] = {{"command", "bs_sim run " + path}, {"overrides", overrides}};
+    const RunOutcome r = run_simulation(rc, extra);
 
-    const SimStats& st = sim.stats();
+    const SimStats& st = r.stats;
     uint64_t events = 0;
     for (uint64_t n : st.events) {
         events += n;
     }
-    // Throughput over every batch read, fast-forwarded or not: the wall time covers both
-    const uint64_t batches = st.fast_forward_batches + st.data_batches;
-    const double batches_per_s = secs > 0 ? static_cast<double>(batches) / secs : 0.0;
-    nlohmann::json meta = run_inputs(rc);
-    meta["git"] = git_info();
-    meta["run"] = {{"command", "bs_sim run " + path}, {"overrides", overrides}, {"wall_seconds", secs},
-                   {"batches_per_second", batches_per_s}};
-    const nlohmann::json out = recorder.finish(meta);
-
-    const SessionStats ss = sim.gateway().stats(s);
-    const Account& a = sim.gateway().exchange_account(s);
-    const nlohmann::json& acct = out["sessions"][s]["exchange_account"];
+    const double secs = r.wall_seconds;
+    const double batches_per_s = r.meta["run"]["batches_per_second"].get<double>();
+    const SessionStats& ss = r.session;
+    const Account& a = r.account;
+    const nlohmann::json& acct = r.meta["sessions"][0]["exchange_account"];
     std::printf("window    %s .. %s (warm-up to %s)\n", format_time_ns(st.start_ns).c_str(),
                 format_time_ns(st.end_ns).c_str(), format_time_ns(st.trading_ns).c_str());
     std::printf("data      %llu batches fast-forwarded, %llu in the window (%llu events); %.2f s, %.2f M batches/s\n",
@@ -553,8 +545,34 @@ int cmd_run(const std::string& path, const std::vector<std::string>& args) {
                 format_fixed(a.base_volume).c_str(), rc.symbol.c_str());
     std::printf("result    position %s, cash %s, fees %s, PnL %s at mark %s\n", acct["position"].get<std::string>().c_str(),
                 acct["cash"].get<std::string>().c_str(), acct["fees"].get<std::string>().c_str(),
-                acct["pnl"].get<std::string>().c_str(), out["final_mark"].get<std::string>().c_str());
-    std::printf("output    %s  (output_hash %s)\n", rc.output_dir.c_str(), recorder.output_hash().c_str());
+                acct["pnl"].get<std::string>().c_str(), r.meta["final_mark"].get<std::string>().c_str());
+    std::printf("output    %s  (output_hash %s)\n", rc.output_dir.c_str(), r.output_hash.c_str());
+    return 0;
+}
+
+int cmd_slice(const std::string& path, const std::vector<std::string>& args) {
+    int64_t from = -1, to = -1;
+    std::string out;
+    for (size_t i = 0; i + 1 < args.size(); i += 2) {
+        if (args[i] == "--from") {
+            from = parse_time(args[i + 1]);
+        } else if (args[i] == "--to") {
+            to = parse_time(args[i + 1]);
+        } else if (args[i] == "--out") {
+            out = args[i + 1];
+        } else {
+            throw std::invalid_argument("unknown option " + args[i]);
+        }
+    }
+    if (args.size() % 2 || from < 0 || to < 0 || out.empty()) {
+        throw std::invalid_argument("slice needs --from TIME --to TIME --out OUT.bse");
+    }
+    Replayer rp(path);
+    const std::vector<bse::Record> records = slice(rp, from, to);
+    bse::write_file(out, rp.header(), records);
+    std::printf("%s: %llu records, %s .. %s, %.1f KB\n", out.c_str(), static_cast<unsigned long long>(records.size()),
+                iso(records.front().ts_local).c_str(), iso(records.back().ts_local).c_str(),
+                static_cast<double>(bse::kHeaderSize + records.size() * bse::kRecordSize) / 1024.0);
     return 0;
 }
 
@@ -584,6 +602,9 @@ int main(int argc, char** argv) {
         }
         if (args[0] == "run" && args.size() >= 2) {
             return cmd_run(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
+        }
+        if (args[0] == "slice" && args.size() >= 2) {
+            return cmd_slice(args[1], std::vector<std::string>(args.begin() + 2, args.end()));
         }
         usage();
         return 2;

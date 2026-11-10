@@ -1,6 +1,7 @@
 #include "reconstruct.hpp"
 
 #include <algorithm>
+#include <stdexcept>
 
 namespace sim {
 
@@ -104,6 +105,46 @@ ReconstructStats reconstruct(Replayer& replayer, Reconstructor& r, const Reconst
     ReconstructStats stats = r.stats();
     stats.checkpoints = checkpoints;
     return stats;
+}
+
+std::vector<bse::Record> slice(Replayer& replayer, int64_t from, int64_t to) {
+    if (to <= from) {
+        throw std::invalid_argument("slice: the end must be after the start");
+    }
+    replayer.rewind();
+    Reconstructor r;
+    std::vector<bse::Record> out;
+    std::vector<Level> levels;
+    bool started = false;
+    Batch b;
+    while (replayer.next(b) && b.ts_local() < to) {
+        if (b.ts_local() < from) {
+            r.apply(b);
+            continue;
+        }
+        if (!started) {
+            if (!r.valid()) {
+                throw std::invalid_argument("slice: the book isn't valid at the start (before the first snapshot, "
+                                            "or in a gap)");
+            }
+            const uint16_t f = bse::FROM_SNAPSHOT | bse::SYNTHETIC_SNAPSHOT;
+            out.push_back(bse::Record{from, 0, 0, 0, 0, bse::SNAP_BEGIN, 0, f});
+            for (uint8_t side = 0; side < 2; ++side) {
+                r.book().top(side, r.book().levels(side), levels);
+                for (const Level& l : levels) {
+                    out.push_back(bse::Record{from, 0, l.px, l.qty, 0, bse::SNAP_LEVEL, side, f});
+                }
+            }
+            out.push_back(bse::Record{from, 0, 0, 0, 0, bse::SNAP_END, 0,
+                                      static_cast<uint16_t>(f | bse::LAST_IN_BATCH)});
+            started = true;
+        }
+        out.insert(out.end(), b.begin, b.end);
+    }
+    if (!started) {
+        throw std::invalid_argument("slice: no data in the window");
+    }
+    return out;
 }
 
 } // namespace sim

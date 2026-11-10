@@ -1,0 +1,2 @@
+# Binary market data (tests/sim/data fixtures): never convert line endings
+*.bse binary
