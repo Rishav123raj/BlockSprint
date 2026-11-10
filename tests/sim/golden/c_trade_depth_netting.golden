@@ -1,0 +1,31 @@
+# (c) A trade and the depth event reflecting it are not counted twice.
+#
+# cancel_from_front, the optimistic model: if the depth drop after a trade were also treated as cancels,
+# they would come from ahead of us and show at once.
+#   2  our bid (2 lots) arrives behind 10:              [syn 10][S1 2]
+#   3  a seller takes 4 from the front:                 [syn 6][S1 2]
+#   4  depth 10 -> 6: all explained by the trade        [syn 6][S1 2]      (not [syn 2][S1 2])
+#   5  depth 6 -> 8: growth joins the back              [syn 6][S1 2][syn 2]
+#   6  a seller takes 1:                                [syn 5][S1 2][syn 2]
+#   7  depth 8 -> 5: 1 traded, 2 cancelled; only the 2 go to the model, from the front: [syn 3][S1 2][syn 2]
+# No fill.
+
+queue cancel_from_front
+end 20
+data 0 snapshot bid 100.00 0.010 ask 101.00 0.004
+send 1 o1 buy limit 100.00 0.002
+data 3 trade sell 100.00 0.004
+data 4 depth bid 100.00 0.006
+data 5 depth bid 100.00 0.008
+data 6 trade sell 100.00 0.001
+data 7 depth bid 100.00 0.005
+
+queue_at 2 bid 100.00 = syn 0.010 | S1 0.002
+queue_at 3 bid 100.00 = syn 0.006 | S1 0.002
+queue_at 4 bid 100.00 = syn 0.006 | S1 0.002
+queue_at 5 bid 100.00 = syn 0.006 | S1 0.002 | syn 0.002
+queue_at 6 bid 100.00 = syn 0.005 | S1 0.002 | syn 0.002
+queue_at 7 bid 100.00 = syn 0.003 | S1 0.002 | syn 0.002
+
+expect 2 3 o1 ack
+final position 0 cash 0 fees 0

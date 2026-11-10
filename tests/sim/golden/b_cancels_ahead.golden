@@ -1,0 +1,39 @@
+# (b) Cancels the data doesn't explain, under each deterministic queue model.
+#
+# The bid (2 lots) reaches the exchange at 3 behind 6 lots; 4 more join behind it at 4:
+#   [syn 6][S1 2][syn 4]
+# At 5 the level drops from 12 to 5 with no trade: 5 lots were cancelled, and the model decides where.
+#   cancel_from_back   the newest first: the 4 behind us, then 1 ahead  -> [syn 5][S1 2]
+#   cancel_from_front  the oldest first: 5 of the 6 ahead               -> [syn 1][S1 2][syn 4]
+#   pro_rata           by size, 6:4 of 5 = 3:2                          -> [syn 3][S1 2][syn 2]
+# At 6 a seller takes 4 lots: we fill min(2, max(0, 4 - ahead)).
+#   back   ahead 5: nothing. The 4 lots come off the front: [syn 1][S1 2]
+#   front  ahead 1: 1, then our 2 (filled), then 1 more synthetic (the real trade took 4 of real
+#          liquidity, only 2 of it synthetic so far); fee 0.2 x 0.1% = 0.0002
+#   pro    ahead 3: 3, then 1 of our 2 (partially filled, 1 left); fee 0.1 x 0.1% = 0.0001
+# The probabilistic models (prob_power, prob_log) are random by design; their hand-computed cases use a
+# fixed generator in synthesizer_test.cpp.
+
+queue cancel_from_back cancel_from_front pro_rata
+end 20
+data 0 snapshot bid 100.00 0.006 ask 101.00 0.004
+send 2 o1 buy limit 100.00 0.002
+data 4 depth bid 100.00 0.010
+data 5 depth bid 100.00 0.005
+data 6 trade sell 100.00 0.004
+
+queue_at 4 bid 100.00 = syn 0.006 | S1 0.002 | syn 0.004
+queue_at@cancel_from_back 5 bid 100.00 = syn 0.005 | S1 0.002
+queue_at@cancel_from_front 5 bid 100.00 = syn 0.001 | S1 0.002 | syn 0.004
+queue_at@pro_rata 5 bid 100.00 = syn 0.003 | S1 0.002 | syn 0.002
+queue_at@cancel_from_back 6 bid 100.00 = syn 0.001 | S1 0.002
+queue_at@cancel_from_front 6 bid 100.00 = syn 0.001
+queue_at@pro_rata 6 bid 100.00 = S1 0.001 | syn 0.001
+
+expect 3 4 o1 ack
+expect@cancel_from_front 6 7 o1 fill 100.00 0.002 maker fee 0.0002 leaves 0.000
+expect@pro_rata 6 7 o1 fill 100.00 0.001 maker fee 0.0001 leaves 0.001
+
+final@cancel_from_back position 0 cash 0 fees 0
+final@cancel_from_front position 0.002 cash -0.2 fees 0.0002
+final@pro_rata position 0.001 cash -0.1 fees 0.0001

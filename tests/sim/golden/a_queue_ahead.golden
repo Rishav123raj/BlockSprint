@@ -1,0 +1,28 @@
+# (a) Trades consume the queue ahead of the strategy's bid, then fill it.
+#
+# 1 ms each way. The strategy sees the snapshot at 1 and bids at 2; the bid reaches the exchange at 3,
+# behind the 10 lots already at 100.00.
+#   5  +2 lots join the back:                  [syn 10][S1 2][syn 2]
+#   6  a seller takes 3 from the front:        [syn 7][S1 2][syn 2]
+#   7  the depth event reflecting that trade:  nothing more to remove
+#   8  a seller takes 9: 7 synthetic, then our 2 (filled at 8, learned at 9). The real trade took 9 lots of
+#      real liquidity, so 2 more come off the synthetic queue: the level is empty, as the data says at 9.
+# Fill: 0.002 at 100.00 = 0.2 USDT; maker fee 0.1% = 0.0002.
+
+end 20
+data 0 snapshot bid 100.00 0.010 ask 101.00 0.004
+send 2 o1 buy limit 100.00 0.002
+data 5 depth bid 100.00 0.012
+data 6 trade sell 100.00 0.003
+data 7 depth bid 100.00 0.009
+data 8 trade sell 100.00 0.009
+data 9 depth bid 100.00 0
+
+queue_at 3 bid 100.00 = syn 0.010 | S1 0.002
+queue_at 5 bid 100.00 = syn 0.010 | S1 0.002 | syn 0.002
+queue_at 7 bid 100.00 = syn 0.007 | S1 0.002 | syn 0.002
+queue_at 8 bid 100.00 = empty
+
+expect 3 4 o1 ack
+expect 8 9 o1 fill 100.00 0.002 maker fee 0.0002 leaves 0.000
+final position 0.002 cash -0.2 fees 0.0002

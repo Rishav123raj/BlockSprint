@@ -145,9 +145,12 @@ if(BLOCKSPRINT_BUILD_SIM)
             tests/sim/config_test.cpp
             tests/sim/recorder_test.cpp
             tests/sim/strategies_test.cpp
+            tests/sim/golden_test.cpp
         )
         target_include_directories(sim_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest)
         target_link_libraries(sim_tests PRIVATE sim)
+        target_compile_definitions(sim_tests PRIVATE
+            BLOCKSPRINT_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/sim/golden")
         blocksprint_warnings(sim_tests)
         add_test(NAME sim_tests COMMAND sim_tests)
     endif()

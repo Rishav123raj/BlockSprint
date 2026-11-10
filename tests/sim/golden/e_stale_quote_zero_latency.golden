@@ -1,0 +1,20 @@
+# (e) without latency: the same market, and the strategy acts the moment it sees each change.
+#
+#   0   joins the ask with 1 lot (ack at 0)
+#   20  sees the 100.10 asks pulled and cancels at once: cancelled at 20, before the buyer at 22
+#   22  the buyer takes 1 of the 3 lots at 100.20
+# No fill.
+
+latency 0
+end 50
+data 0 snapshot bid 100.00 0.005 ask 100.10 0.002
+send 0 o1 sell limit 100.10 0.001
+data 20 depth ask 100.10 0 ask 100.20 0.003
+cancel 20 o1
+data 22 trade buy 100.20 0.001
+
+queue_at 22 ask 100.20 = syn 0.002
+
+expect 0 0 o1 ack
+expect 20 20 o1 cancelled user
+final position 0 cash 0 fees 0

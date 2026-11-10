@@ -711,6 +711,28 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 - an IOC through 3 levels with fees;
 - gap handling.
 
+**As built (P3.16):** the scenarios first ran at the synthesizer level (P3.6) and the gateway level (P3.10). P3.16 runs them **end to end**: one text file per scenario in `tests/sim/golden/`, which the runner (`tests/sim/golden_test.cpp`) writes to a `.bse` file and runs through the whole `Simulator` (replayer, synthesizer, engine, latency, gateway, a scripted strategy).
+
+A file holds:
+- the market, as data lines (`data 5 depth bid 100.00 0.012`, `data 6 trade sell 100.00 0.003`, `data 3 gap`);
+- the strategy's actions at fixed times (`send 2 o1 buy limit 100.00 0.002`, `cancel 25 o1`, `replace`, `amend`);
+- the setup (`latency 5`, `queue <models>`, `fees`, `end`);
+- what must come out, worked out by hand in the file's comments: every report and refused request with its exchange and delivery times (`expect 8 9 o1 fill 100.00 0.002 maker fee 0.0002 leaves 0.000`), the engine's queue at a price after a given time (`queue_at 7 bid 100.00 = syn 0.007 | S1 0.002 | syn 0.002`), and the final account.
+
+A file can run under several queue models, with lines for one model only (`expect@pro_rata ...`).
+
+| File | Scenario |
+| :--- | :--- |
+| `a_queue_ahead` | trades consume the queue ahead, then fill the strategy's bid |
+| `b_cancels_ahead` | unexplained cancels under `cancel_from_back`, `cancel_from_front`, `pro_rata`, then a trade |
+| `c_trade_depth_netting` | a trade and the depth event reflecting it are not counted twice |
+| `d_crossing_fill` | the data moves through a resting ask: filled at the order's price |
+| `e_stale_quote`, `e_stale_quote_zero_latency` | 5 ms latency gets a stale ask picked off and its cancel refused; with no latency it's cancelled in time |
+| `f_ioc_three_levels` | an IOC through 3 levels, taker fee on each, the remainder cancelled |
+| `g_gap` | a gap flushes the synthetic book; the resync snapshot fills the bid the market moved through |
+
+All 8 matched their hand-computed results on the first run, on MSVC and GCC. A deliberately wrong expectation fails with the actual and expected lines side by side. The probabilistic queue models (`prob_power`, `prob_log`) are random by design; their hand-computed cases stay at the synthesizer level, with a fixed generator.
+
 ---
 
 ## 16. Implementation status
@@ -732,8 +754,9 @@ A one-lot change in a dump is caught (negative control). The full day replays at
 | P3.12 | Run config: layers, latency presets, overrides, dataset resolution; `bs_sim config` | done |
 | P3.13 | Result recorder: five CSVs, run_meta.json, output hash (SHA-256) | done |
 | P3.15 | Reference strategies: `passive_quoter`, `twap_taker` (§11.4) | done |
-| P3.16 | Golden scenario tests | next |
-| P3.17–P3.18 | Cross-platform determinism, benchmarks | after |
+| P3.16 | Golden scenarios end to end: `tests/sim/golden/*.golden` through the whole simulator | done |
+| P3.17 | Cross-platform determinism | next |
+| P3.18 | Benchmarks | after |
 
 ---
 
@@ -778,7 +801,7 @@ tests/sim/                doctest: rng, event queue, replayer, reconstruction, q
                           (window, warm-up, end of data, tie-break, determinism), config, recorder
                           (golden e rows, SHA-256 vectors, output hashes), strategies (registry, params,
                           quoter and TWAP runs);
-                          sim_helpers.hpp; golden/ (P3.16)
+                          sim_helpers.hpp; golden_test.cpp + golden/*.golden (P3.16: end-to-end scenarios)
 configs/sim/              example run configs
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
 bench/bench_sim.cpp       (P3.18)

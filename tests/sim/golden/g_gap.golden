@@ -1,0 +1,29 @@
+# (g) A gap flushes the synthetic book; nothing matches until the next snapshot.
+#
+#   2  our bid, 2 lots at 100.00, arrives behind 5
+#   3  GAP: the 5 synthetic lots (and the asks) are removed; our order stays
+#   4  a seller takes 10 lots at 100.00: it would have reached us, but the book is unknown: not matched
+#   5  a depth event (an ask at 99.50) is ignored until the book is re-established
+#   6  the resync snapshot: bid 99.00 x 3, ask 99.50 x 5. The market moved down through our bid while we
+#      weren't looking: the ask at 99.50 trades with our bid at its price, 100.00, for 2 lots (maker,
+#      fee 0.0002); 3 lots rest at 99.50.
+
+end 20
+data 0 snapshot bid 100.00 0.005 ask 101.00 0.005
+send 1 o1 buy limit 100.00 0.002
+data 3 gap
+data 4 trade sell 100.00 0.010
+data 5 depth ask 99.50 0.001
+data 6 snapshot bid 99.00 0.003 ask 99.50 0.005
+
+queue_at 2 bid 100.00 = syn 0.005 | S1 0.002
+queue_at 3 bid 100.00 = S1 0.002
+queue_at 3 ask 101.00 = empty
+queue_at 5 bid 100.00 = S1 0.002
+queue_at 5 ask 99.50 = empty
+queue_at 6 bid 100.00 = empty
+queue_at 6 ask 99.50 = syn 0.003
+
+expect 2 3 o1 ack
+expect 6 7 o1 fill 100.00 0.002 maker fee 0.0002 leaves 0.000
+final position 0.002 cash -0.2 fees 0.0002

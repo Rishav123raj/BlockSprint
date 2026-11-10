@@ -1,0 +1,24 @@
+# (d) The data moving through a resting strategy order fills it, at the order's price.
+#
+#   2  our ask, 3 lots at 101.00, arrives between bid 100.00 and ask 102.00
+#   3  a bid of 2 lots appears at 101.50: it crosses our ask. It trades with us for at most the added
+#      quantity, at our price: 2 lots at 101.00 (maker), 1 left. Fee 0.202 x 0.1% = 0.000202
+#   4  the 101.50 bid changes to 3. The synthetic level there is empty (its 2 lots traded with us at 3),
+#      so 3 lots are added: 1 trades with our last lot (fee 0.000101) and 2 rest.
+# Position -0.003, cash 0.202 + 0.101 = 0.303, fees 0.000303.
+
+end 20
+data 0 snapshot bid 100.00 0.005 ask 102.00 0.005
+send 1 o1 sell limit 101.00 0.003
+data 3 depth bid 101.50 0.002
+data 4 depth bid 101.50 0.003
+
+queue_at 3 bid 101.50 = empty
+queue_at 3 ask 101.00 = S1 0.001
+queue_at 4 bid 101.50 = syn 0.002
+queue_at 4 ask 101.00 = empty
+
+expect 2 3 o1 ack
+expect 3 4 o1 fill 101.00 0.002 maker fee 0.000202 leaves 0.001
+expect 4 5 o1 fill 101.00 0.001 maker fee 0.000101 leaves 0.000
+final position -0.003 cash 0.303 fees 0.000303

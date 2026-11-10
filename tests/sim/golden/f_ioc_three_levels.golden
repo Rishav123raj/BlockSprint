@@ -1,0 +1,27 @@
+# (f) An IOC through 3 levels pays the taker fee on each; the rest is cancelled.
+#
+# Asks: 2 lots at 101.00, 3 at 102.00, 5 at 103.00. The strategy sends an IOC to buy 11 lots up to 103.00
+# at 1; it arrives at 2:
+#   2 @ 101.00 = 0.202, fee 0.000202, 9 left
+#   3 @ 102.00 = 0.306, fee 0.000306, 6 left
+#   5 @ 103.00 = 0.515, fee 0.000515, 1 left
+#   the last lot has nothing at or below 103.00: cancelled (ioc_remainder)
+# Total: position 0.010, cash -1.023, fees 0.001023.
+# The synthetic asks it took stay gone (no impact decay) until the data changes a level: at 3 the data
+# sets 103.00 to 4 lots, and the engine follows; 101.00, unchanged in the data, stays empty.
+
+end 20
+data 0 snapshot bid 100.00 0.001 ask 101.00 0.002 ask 102.00 0.003 ask 103.00 0.005
+send 1 o1 buy ioc 103.00 0.011
+data 3 depth ask 103.00 0.004
+
+queue_at 2 ask 103.00 = empty
+queue_at 3 ask 103.00 = syn 0.004
+queue_at 3 ask 101.00 = empty
+
+expect 2 3 o1 ack
+expect 2 3 o1 fill 101.00 0.002 taker fee 0.000202 leaves 0.009
+expect 2 3 o1 fill 102.00 0.003 taker fee 0.000306 leaves 0.006
+expect 2 3 o1 fill 103.00 0.005 taker fee 0.000515 leaves 0.001
+expect 2 3 o1 cancelled ioc_remainder
+final position 0.010 cash -1.023 fees 0.001023

@@ -1,0 +1,28 @@
+# (e) Latency makes a quote stale and it gets picked off.
+#
+# 5 ms feed, entry and ack.
+#   5   the strategy sees the snapshot (bid 100.00, ask 100.10) and joins the ask with 1 lot
+#   10  the order arrives, behind the 2 lots at 100.10 (ack learned at 15)
+#   20  the data's 100.10 asks are pulled and 3 lots appear at 100.20: our ask is alone at 100.10, stale
+#   22  a buyer lifts the data's best ask (100.20) for 1 lot. In the engine our 100.10 is the best ask,
+#       so it is hit first: filled at 100.10, learned at 27. Fee 0.1001 x 0.1% = 0.0001001
+#   25  the strategy sees the change at 20 and cancels; the cancel arrives at 30, the order is gone:
+#       refused, learned at 35
+# The data trade took 1 lot of real liquidity at 100.20, which comes off the synthetic queue there.
+
+latency 5
+end 50
+data 0 snapshot bid 100.00 0.005 ask 100.10 0.002
+send 5 o1 sell limit 100.10 0.001
+data 20 depth ask 100.10 0 ask 100.20 0.003
+data 22 trade buy 100.20 0.001
+cancel 25 o1
+
+queue_at 10 ask 100.10 = syn 0.002 | S1 0.001
+queue_at 20 ask 100.10 = S1 0.001
+queue_at 22 ask 100.20 = syn 0.002
+
+expect 10 15 o1 ack
+expect 22 27 o1 fill 100.10 0.001 maker fee 0.0001001 leaves 0.000
+expect 30 35 o1 refused cancel
+final position -0.001 cash 0.1001 fees 0.0001001
