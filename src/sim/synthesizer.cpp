@@ -150,9 +150,22 @@ void Synthesizer::apply_trade(const bse::Record& r) {
     tape_->quantity = qty;
     tape_->timestamp = engine_.clock().now_ns();
     trades_ = engine_.submit_order(tape_);
+    int64_t at_price = 0, filled = 0;
     for (const Trade& t : trades_) {
-        (is_synthetic_id(t.maker_order_id) ? stats_.tape_synthetic_qty : stats_.tape_strategy_qty) += t.quantity;
+        filled += t.quantity;
+        if (!is_synthetic_id(t.maker_order_id)) {
+            stats_.tape_strategy_qty += t.quantity;
+            continue;
+        }
+        stats_.tape_synthetic_qty += t.quantity;
+        if (t.price == price) {
+            at_price += t.quantity;
+        } else {
+            stats_.tape_through_qty += t.quantity;
+        }
     }
+    stats_.tape_short_qty += qty - filled;
+    stats_.trades_exact += at_price == qty;
 
     // The real trade took qty of real liquidity at this price. What the synthetic queue here didn't give
     // (strategy orders, or stale better levels, took it) comes off its front now, so the depth event that

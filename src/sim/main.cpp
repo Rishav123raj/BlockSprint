@@ -313,7 +313,14 @@ int cmd_synth(const std::string& path, const std::vector<std::string>& args) {
               << " records/s (comparisons excluded)\n"
               << "quantities      added " << lots(s.added_qty) << ", cancelled (queue model) " << lots(s.cancelled_qty)
               << ", traded " << lots(s.trade_qty) << " (tape took " << lots(s.tape_synthetic_qty)
-              << " synthetic; front removals " << lots(s.trade_front_qty) << ")\n"
+              << " synthetic; front removals " << lots(s.trade_front_qty) << ")\n";
+    const uint64_t synced_trades = s.trades - s.trades_unsynced;
+    std::printf("V4              %llu of %llu synced trades took exactly their quantity at their price (%.4f%%);\n"
+                "                through better (stale) levels %s, short (not in the book) %s, of %s traded\n",
+                static_cast<unsigned long long>(s.trades_exact), static_cast<unsigned long long>(synced_trades),
+                synced_trades ? 100.0 * static_cast<double>(s.trades_exact) / static_cast<double>(synced_trades) : 0.0,
+                lots(s.tape_through_qty).c_str(), lots(s.tape_short_qty).c_str(), lots(s.trade_qty).c_str());
+    std::cout
               << "dropped         " << lots(s.would_cross_qty) << " (the data itself was crossed)\n";
     if (compared) {
         std::printf("after depth     top %zu equal to the data in %.4f%% of %llu books; %.5f%% of %llu levels\n", top_n,

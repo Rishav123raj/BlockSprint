@@ -189,4 +189,38 @@ TEST_CASE("the same run twice in one process gives the same hash") {
     CHECK(run(s.config, a.str()).output_hash == run(s.config, b.str()).output_hash);
 }
 
+TEST_CASE("gate V3: optimistic assumptions never fill PassiveQuoter less (latency x queue model)") {
+    // Best: no latency, cancels from the front (the quote moves up fastest). Worst: home-PC latency,
+    // cancels from the back. Filled volume must not increase along either axis towards the worst case.
+    // Fill counts aren't monotone (pro_rata gives fewer, larger partial fills), and neither is PnL: the
+    // quoter has no edge, so more fills lose more (docs/simulator_architecture.md, section 15).
+    const std::vector<std::string> latencies{"zero", "binance_spot_tokyo_vps", "binance_spot_home_pc"};
+    const std::vector<std::string> models{"cancel_from_front", "pro_rata", "cancel_from_back"};
+    int64_t volume[3][3] = {};
+    for (size_t l = 0; l < 3; ++l) {
+        for (size_t m = 0; m < 3; ++m) {
+            json cfg{{"latency_preset", latencies[l]},
+                     {"queue_model", {{"model", models[m]}}},
+                     {"strategy", {{"name", "passive_quoter"},
+                                   {"params", {{"size", "0.001"}, {"refresh_ms", 100}, {"max_position", "0.005"}}}}},
+                     {"output", {{"sample_ms", 1000}}}};
+            TempPath dir("");
+            volume[l][m] = run(cfg, dir.str()).account.base_volume;
+            CAPTURE(latencies[l]);
+            CAPTURE(models[m]);
+            CHECK(volume[l][m] > 0);
+        }
+    }
+    for (size_t l = 0; l < 3; ++l) {
+        for (size_t m = 0; m < 3; ++m) {
+            CAPTURE(l);
+            CAPTURE(m);
+            if (l + 1 < 3) CHECK(volume[l][m] >= volume[l + 1][m]);
+            if (m + 1 < 3) CHECK(volume[l][m] >= volume[l][m + 1]);
+        }
+    }
+    CHECK(volume[0][0] > volume[1][1]);  // best > realistic (Tokyo, pro_rata) > worst, strictly
+    CHECK(volume[1][1] > volume[2][2]);
+}
+
 } // TEST_SUITE("determinism")

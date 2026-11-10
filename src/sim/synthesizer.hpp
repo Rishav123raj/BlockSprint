@@ -61,6 +61,11 @@ struct SynthStats {
     int64_t tape_synthetic_qty = 0;    // synthetic quantity the tape IOCs consumed
     int64_t tape_strategy_qty = 0;     // strategy quantity the tape IOCs filled
     int64_t trade_front_qty = 0;       // removed from the queue front after a trade that filled strategy orders
+    // Gate V4 (P3.18 follow-up): with no strategy, each data trade of q at price P should take exactly q of
+    // synthetic liquidity at P. Per synced trade:
+    uint64_t trades_exact = 0;         // took exactly q of synthetic liquidity, all of it at P
+    int64_t tape_through_qty = 0;      // synthetic liquidity taken at better prices than P (stale levels)
+    int64_t tape_short_qty = 0;        // q the tape couldn't fill at P or better (e.g. iceberg orders)
     uint64_t crossing_fills = 0;       // trades of synthetic orders with crossed strategy orders
     int64_t crossing_qty = 0;
     int64_t would_cross_qty = 0;       // synthetic quantity dropped because the data itself was crossed

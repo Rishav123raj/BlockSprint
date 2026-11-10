@@ -515,6 +515,13 @@ TEST_CASE("without strategy orders the synthetic book equals the data after ever
         CHECK(f.synth->stats().trades > 500);
         CHECK(f.synth->stats().cancelled_qty > 0);
         CHECK(f.synth->stats().gaps > 10);
+        // Gate V4: every synced data trade took exactly its quantity of synthetic liquidity, at its price
+        const SynthStats& st = f.synth->stats();
+        CHECK(st.trades_exact == st.trades - st.trades_unsynced);
+        CHECK(st.tape_synthetic_qty == st.trade_qty);
+        CHECK(st.tape_through_qty == 0);
+        CHECK(st.tape_short_qty == 0);
+        CHECK(st.tape_strategy_qty == 0);
     }
 }
 

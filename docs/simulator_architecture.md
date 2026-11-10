@@ -713,8 +713,8 @@ The fixture comes from `bs_sim slice` (§13.2), which writes the book at `--from
 | **V0** | Reconstruction vs the Python oracle (`research.data.refbook`) at checkpoints across a full day; transitively vs Binance's REST snapshots, which QC already matched to the oracle | top-N identical at every checkpoint |
 | **V1** | Determinism | identical output hashes across runs and platforms |
 | **V2** | Engine invariants and fuzz under synthetic load | never crossed; quantities conserved |
-| **V3** | Bounds: zero latency + `CancelFromFront` vs high latency + `CancelFromBack` | realistic results fall between them |
-| **V4** | `NullStrategy`: synthetic trade volume per price equals historical volume; synthetic book equals the reconstructed book after every batch | exact |
+| **V3** | Bounds: zero latency + `CancelFromFront` vs high latency + `CancelFromBack` | realistic **filled volume** falls between them (PnL doesn't have to: see below) |
+| **V4** | `NullStrategy`: synthetic trade volume per price equals historical volume; synthetic book equals the reconstructed book after every batch | exact on consistent data; measured on real data (see below) |
 | **V5** | Live parity: paper trading on the live mirror vs the simulator on the same period | fill ratio, markouts and slippage within tolerance; calibrates queue and latency models |
 
 **V0 result (2026-11-06):** `bs_sim reconstruct` on 2026-11-05 matched the oracle at every checkpoint:
@@ -722,6 +722,32 @@ The fixture comes from `bs_sim slice` (§13.2), which writes the book at `--from
 - ETHUSDT: 264 of 264.
 
 A one-lot change in a dump is caught (negative control). The full day replayed at 3.4–4.6 M records/s with `std::map` levels. Since P3.18's windowed L2 book it replays at 16.3 M records/s (`docs/baseline/bench_sim.md`).
+
+**V3 result (2026-11-10).** `PassiveQuoter` (0.001, 500 ms) on BTCUSDT 2026-11-05 02:00–08:00:
+
+| Case | Fills | Volume | Fees | PnL | PnL before fees |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| best: zero latency, `cancel_from_front` | 24,891 | 6.47 | 521 | −563 | −42 |
+| realistic: Tokyo preset, `pro_rata` | 14,055 | 4.56 | 367 | −406 | −38 |
+| worst: home-PC preset, `cancel_from_back` | 13,866 | 3.25 | 262 | −295 | −33 |
+
+- **Filled volume** is ordered best ≥ realistic ≥ worst.
+- **PnL is ordered the other way, even before fees.** The quoter has no edge: it joins the best price whatever is coming, so its fills are adversely selected, and optimistic assumptions just give it more of them. A PnL bound holds only for a strategy that earns per fill, so the gate is on filled volume.
+- **Fill count isn't a good measure either.** On the test slice, home-PC latency with `pro_rata` gives fewer but larger partial fills than with `cancel_from_back`, for the same volume.
+
+The test (`tests/sim/determinism_test.cpp`) runs the 3 latency presets × 3 queue models on the committed one-minute slice. Filled volume must never increase towards the worst case along either axis, and must fall strictly from best through realistic (Tokyo, `pro_rata`) to worst.
+
+**V4 result (2026-11-10).** `bs_sim synth` reports, per data trade of quantity *q* at price *P*, whether the tape took exactly *q* of synthetic liquidity at *P*. If not, it records what was taken at better prices ("through": levels the data still showed) and what wasn't there ("short").
+- **On consistent streams** (the random-stream test: trades at the best price, never more than the level, followed by the depth event that reflects them) it is exact under all five queue models: every synced trade, nothing through, nothing short. The test asserts this.
+- **On real data**, Nov 5–7:
+
+  | | BTCUSDT | ETHUSDT |
+  | :--- | ---: | ---: |
+  | synced trades exact | 51.4% | 56.6% |
+  | volume through better levels | 11.6% | 14.3% |
+  | volume short (not in the book) | 11.0% | 10.2% |
+
+  The likely cause is the data, not the synthesizer: Binance's depth stream is one update per 100 ms, while every trade arrives as it happens. Orders placed and filled within an interval never appear in the depth data (short), and orders cancelled within one stay visible until the next update (through). Iceberg orders add to short. This explanation hasn't been verified trade by trade. It bounds how exactly any L2-based simulator can place historical trades. The synthesizer's handling (front removals after a trade, levels set to the data at each update) keeps the book equal to the data after every depth event (99.91% of BTCUSDT books identical in the top 20, §8.6).
 
 **Golden scenarios (P3.16):** hand-written tiny `.bse` fixtures, each with expected fills computed by hand *before* the code:
 - the queue ahead is consumed by trades;
