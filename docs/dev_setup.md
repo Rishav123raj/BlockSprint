@@ -63,32 +63,42 @@ print(meta["output_hash"], meta["sessions"][0]["exchange_account"]["pnl"])
 - `bs.resolve_config(config, overrides)` returns the resolved config, as `bs_sim config` prints it.
 - Errors in a config (an unknown key, strategy or parameter) raise `ValueError` naming the key.
 
-### A strategy in Python (P4.3, P4.4)
+### A strategy in Python (P4.3, P4.4, P4.6)
 
 ```python
 import blocksprint_sim as bs
+from research.strategies import Context, ExecReport, Strategy
 
-class TimerQuoter:
+class TimerQuoter(Strategy):
     """Every second: a post-only bid at the best bid."""
-    def on_start(self, ctx):
+    callback_mode = "timer_only"                         # used unless the caller passes one
+
+    def on_start(self, ctx: Context) -> None:
         ctx.set_timer(1_000_000_000)                     # ns
 
-    def on_timer(self, ctx, timer_id):
+    def on_timer(self, ctx: Context, timer_id: int) -> None:
         book = ctx.book()
-        if ctx.can_trade() and book.valid():
-            ctx.send(bs.Side.BUY, bs.OrderType.LIMIT_MAKER, book.best_bid().price, bs.to_fixed("0.001"))
+        if ctx.can_trade() and book.valid() and (bid := book.best_bid()):
+            ctx.send(bs.Side.BUY, bs.OrderType.LIMIT_MAKER, bid.price, bs.to_fixed("0.001"))
         ctx.set_timer(1_000_000_000)
 
-    def on_exec(self, ctx, report):                      # an ExecReport
+    def on_exec(self, ctx: Context, report: ExecReport) -> None:
         if report.type == bs.ExecType.FILL:
             print(bs.from_fixed(report.last_qty), "@", bs.from_fixed(report.last_px))
 
-cfg = bs.SimConfig({"dataset": "...", "latency_preset": "binance_spot_tokyo_vps",
-                    "output": {"dir": "results/py_quoter"}})
-meta = bs.Simulator(cfg, TimerQuoter(), callback_mode="timer_only").run()
+cfg = {"dataset": "...", "latency_preset": "binance_spot_tokyo_vps", "strategy": {"name": "null"},
+       "output": {"dir": "results/py_quoter"}}
+res = TimerQuoter().run(cfg)                             # Results (below); or bs.Simulator(bs.SimConfig(cfg), TimerQuoter()).run()
 ```
 
-**Callbacks.** A strategy is any object with some of these methods; a missing method costs nothing:
+**The base class** (`research/strategies/base.py`):
+- **Callbacks:** override the ones you need. The defaults are marked so the C++ adapter never calls them, so they cost nothing.
+- **Class attributes:** `name` (default: the class name) and `callback_mode` (default `every_event`). `Simulator` and `Results.run` use the strategy's `callback_mode` unless they're given one.
+- **Typos fail early:** a method named `on_*` that isn't a callback (for example `on_fill`) raises `TypeError` when the class is defined, instead of silently never running.
+- **Types:** `Context`, `Book`, `BookLevel`, `TradeEvent`, `ExecReport`, `RequestReject`, `Account` and `OpenOrder` are typing `Protocol`s describing the C++ objects, for editors and type checkers (mypy passes). They cost nothing at run time. A test checks that each lists exactly the members of its bound class.
+- **Plain objects still work:** a strategy needn't subclass anything; any object with some of the methods below runs. `strategy.name` in the config is still required; `"null"` will do.
+
+**Callbacks.** A strategy has some of these methods; a missing method costs nothing:
 
 | Method | When |
 | :--- | :--- |
@@ -124,8 +134,6 @@ meta = bs.Simulator(cfg, TimerQuoter(), callback_mode="timer_only").run()
 | `every_event` | 38.2 s | 3.69 M |
 
 `bs.Simulator(cfg)` without a strategy runs the config's C++ `strategy.name`, the same as `bs.run`.
-
-A typed Python base class for strategies comes in P4.6.
 
 ### Results as numpy and polars (P4.5)
 

@@ -79,9 +79,10 @@ class Results:
         return cls(sim.meta, sim.tables())
 
     @classmethod
-    def run(cls, config: bs.SimConfig | dict[str, Any], strategy: Any = None, callback_mode: str = "every_event",
+    def run(cls, config: bs.SimConfig | dict[str, Any], strategy: Any = None, callback_mode: str | None = None,
             overrides: list[str] | tuple[str, ...] = ()) -> Results:
-        """Runs one simulation (bs.Simulator) and returns its results. config: a SimConfig, or a dict."""
+        """Runs one simulation (bs.Simulator) and returns its results. config: a SimConfig, or a dict.
+        callback_mode None: the strategy's own (Strategy.callback_mode), else every_event."""
         if not isinstance(config, bs.SimConfig):
             config = bs.SimConfig(config, list(overrides))
         elif overrides:

@@ -500,11 +500,16 @@ PYBIND11_MODULE(blocksprint_sim, m) {
 
     py::class_<PySimulator>(m, "Simulator",
                             "One run. strategy: a Python object with on_* methods, or None for the config's C++ "
-                            "strategy.name. callback_mode: every_event | on_change | timer_only.")
-        .def(py::init([](RunConfig rc, py::object strategy, const std::string& mode) {
-                 return PySimulator{std::move(rc), std::move(strategy), callback_mode(mode)};
+                            "strategy.name. callback_mode: every_event | on_change | timer_only; None (the "
+                            "default) takes the strategy's callback_mode attribute, else every_event.")
+        .def(py::init([](RunConfig rc, py::object strategy, const py::object& mode) {
+                 // None: the strategy's callback_mode attribute (research.strategies.Strategy), else every_event
+                 py::object m = mode;
+                 if (m.is_none() && !strategy.is_none()) m = py::getattr(strategy, "callback_mode", py::none());
+                 const CallbackMode cm = m.is_none() ? CallbackMode::EVERY_EVENT : callback_mode(py::str(m));
+                 return PySimulator{std::move(rc), std::move(strategy), cm};
              }),
-             py::arg("config"), py::arg("strategy") = py::none(), py::arg("callback_mode") = "every_event")
+             py::arg("config"), py::arg("strategy") = py::none(), py::arg("callback_mode") = py::none())
         .def("run", &PySimulator::run,
              "Runs once and writes the results directory (output.dir). Returns run_meta.json as a dict; with a "
              "Python strategy, python_callbacks counts the calls made.")
