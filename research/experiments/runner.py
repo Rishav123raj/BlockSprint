@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 import shutil
 import time
@@ -178,9 +179,15 @@ def run_experiment(exp: Experiment, workers: int | None = None, force: bool = Fa
     return result
 
 
+# Workers always start fresh ("spawn", the only method on Windows). Linux's default, fork, copies the parent
+# with whatever threads it runs, such as polars' and Arrow's pools, and a forked child that uses them can
+# deadlock (CI hung exactly so)
+_SPAWN = multiprocessing.get_context("spawn")
+
+
 def _run_pool(todo, n_workers: int, store_root: str, finish) -> None:
     retry = []
-    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+    with ProcessPoolExecutor(max_workers=n_workers, mp_context=_SPAWN) as pool:
         futures = {pool.submit(execute, spec, rec.run_id, ident, store_root): (rec, spec, ident)
                    for rec, spec, ident in todo}
         for fut in as_completed(futures):
@@ -192,7 +199,7 @@ def _run_pool(todo, n_workers: int, store_root: str, finish) -> None:
             finish(futures[fut][0], out)
     # Each again on its own: the run that crashed fails alone, the others complete
     for rec, spec, ident in retry:
-        with ProcessPoolExecutor(max_workers=1) as pool:
+        with ProcessPoolExecutor(max_workers=1, mp_context=_SPAWN) as pool:
             try:
                 out = pool.submit(execute, spec, rec.run_id, ident, store_root).result()
             except BrokenProcessPool:

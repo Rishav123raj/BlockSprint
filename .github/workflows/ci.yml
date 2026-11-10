@@ -67,6 +67,7 @@ jobs:
     # build) and on a built wheel installed into a clean environment. The wheels are kept as artifacts.
     name: Python / ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30  # a hang (e.g. a deadlocked worker process) fails fast instead of running for hours
     strategy:
       fail-fast: false
       matrix:
