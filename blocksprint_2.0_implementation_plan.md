@@ -53,6 +53,7 @@
 | 2026-11-10 | P4.3, P4.4 done | `bs.SimConfig(dict, overrides)` (resolved config), `bs.Simulator(cfg, strategy=None, callback_mode)`.run() via `run_simulation` (now takes an optional strategy). Python strategies: any object with on_start/on_book/on_trade/on_exec/on_reject/on_timer/on_gap/on_end, driven by a C++ adapter; the GIL is released for the replay and taken only for a method the strategy defines; `every_event | on_change | timer_only` filter in C++ first. Context, ObservedBook, ExecReport, Account, OpenOrder, enums bound; prices/quantities exact 1e-8 integers (`to_fixed`/`from_fixed`). Python exceptions propagate out of run(). A do-nothing Python strategy gives the C++ null strategy's hash; the GIL test shows another thread running during a replay. One BTCUSDT day with a Python 1 s timer strategy: **31.9 s** timer_only, 38.2 s every_event (3.7 M callbacks); target < 2 min. Binding tests import the module strictly (a skip could have hidden a missing build in CI). 52 Python tests |
 | 2026-11-10 | P4.5 done | The recorder can keep every output row in memory as fixed-width records (`ResultTables`: orders, exec reports, refused requests, BBO samples, positions; raw ns / 1e-8 / enum codes, interned owners and order IDs); `Simulator.tables()` returns them as numpy structured arrays that view the rows (no copy, valid after the simulator is gone); `result_codes()` names the codes with the CSV's strings. `research/sim/results.py`: `Results` (`run`, `from_simulator`, arrays, `to_polars()` -> the five CSV tables with the same columns, strings and nulls, UTC datetimes, exact Decimal(38, 8) or float / int). Tested: every table equals its CSV value for value, for the C++ quoter and a Python strategy sending every request kind; the pinned hash is unchanged with the rows kept. One day (C++ quoter): 365 k rows, 38.6 MB, +4% run time, `to_polars()` 1.8 s. New deps: polars, tzdata. 92 sim tests, 58 Python tests |
 | 2026-11-10 | P4.6 done | `research/strategies/base.py`: `Strategy` base class with the eight callbacks as documented defaults marked `_bs_default` (the C++ adapter never calls them: zero cost), class attributes `name` (default the class name) and `callback_mode` (Simulator / Results.run use it unless given one; `Simulator(callback_mode=None)` now reads it), `strategy.run(config)` -> Results; a non-callback `on_*` method or a bad mode is a TypeError at class definition. Typed facade: `Context`, `Book`, `BookLevel`, `TradeEvent`, `ExecReport`, `RequestReject`, `Account`, `OpenOrder` as typing Protocols (no run-time cost), tested to list exactly the bound classes' members; mypy clean. 70 Python tests |
+| 2026-11-10 | P4.7 done | `research/strategies/passive_quoter.py`: line-for-line Python port of the C++ `PassiveQuoter` on the `Strategy` base class (same params and validation, `from_params`). `tests/python/test_parity.py`: Python and C++ give **identical** outputs (all five CSV hashes, output hash, gateway stats) on four scenarios: the two pinned determinism scenarios (random latency + prob_power, Tokyo + pro_rata + warm-up + plain LIMIT; equal to the pinned C++ hashes), home-PC defaults, and a 3 ms refresh with requests in flight; identical in every callback mode. A mutation check showed the original scenarios didn't exercise waiting for in-flight requests, hence the 3 ms scenario. Across the real Nov 6 data gap (07:30-14:00) identical too (opt-in: BLOCKSPRINT_SLOW_TESTS=1, ~2 min). 77 Python tests |
 
 ---
 
@@ -435,7 +436,7 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 
 ### Acceptance criteria
 - [ ] `uv sync` on a clean machine builds and imports `blocksprint_sim`.
-- [ ] P4.7 parity passes.
+- [x] P4.7 parity passes. (2026-11-10)
 - [x] A one-day BTCUSDT run with a Python strategy on a 1 s timer finishes in < 2 min. (31.9 s timer_only, 38.2 s every_event; 2026-11-10)
 - [ ] Tag `v2.0.0-p4`.
 
@@ -674,7 +675,7 @@ Tick these off as phases complete.
 
 **Phase 4: Python Bridge**
 - [x] P4.1 pybind11  - [x] P4.2 scikit-build  - [x] P4.3 Bindings  - [x] P4.4 Trampoline/GIL
-- [x] P4.5 numpy results  - [x] P4.6 Strategy base  - [ ] P4.7 Parity  - [ ] P4.8 CI wheels
+- [x] P4.5 numpy results  - [x] P4.6 Strategy base  - [x] P4.7 Parity  - [ ] P4.8 CI wheels
 
 **Phase 5: Research Toolkit**
 - [ ] P5.1 Schema  - [ ] P5.2 Store  - [ ] P5.3 Runner/sweep  - [ ] P5.4 PnL  - [ ] P5.5 TCA

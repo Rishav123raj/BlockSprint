@@ -98,6 +98,17 @@ res = TimerQuoter().run(cfg)                             # Results (below); or b
 - **Types:** `Context`, `Book`, `BookLevel`, `TradeEvent`, `ExecReport`, `RequestReject`, `Account` and `OpenOrder` are typing `Protocol`s describing the C++ objects, for editors and type checkers (mypy passes). They cost nothing at run time. A test checks that each lists exactly the members of its bound class.
 - **Plain objects still work:** a strategy needn't subclass anything; any object with some of the methods below runs. `strategy.name` in the config is still required; `"null"` will do.
 
+**A worked example: `research/strategies/passive_quoter.py`.** This is a line-for-line port of the C++ `PassiveQuoter`. `tests/python/test_parity.py` checks it against the C++ strategy (P4.7): given the same config, the two produce the same requests at the same nanoseconds, so all five output files and the output hash are identical.
+- **Scenarios:** random latency, three queue models, a warm-up window, plain LIMIT quotes, and a 3 ms refresh that finds requests still in flight.
+- **Callback modes:** the result is the same in every mode.
+- **Data gap:** the recorded Nov 6 gap is covered by an extra test that needs the local data and takes about 2 minutes, so it runs only with `BLOCKSPRINT_SLOW_TESTS=1`.
+- **Keeping the two in step:** a change to one strategy must be made to both.
+
+```python
+from research.strategies.passive_quoter import PassiveQuoter
+res = PassiveQuoter.from_params({"size": "0.001", "refresh_ms": 500}).run(cfg)
+```
+
 **Callbacks.** A strategy has some of these methods; a missing method costs nothing:
 
 | Method | When |
