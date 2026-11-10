@@ -4,11 +4,16 @@
 #include "strategies/registry.hpp"
 
 #include <chrono>
+#include <memory>
 
 namespace sim {
 
-RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra) {
-    auto strategy = make_strategy(rc.strategy_name, rc.strategy_params);
+RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra, Strategy* strategy) {
+    std::unique_ptr<Strategy> owned;
+    if (!strategy) {
+        owned = make_strategy(rc.strategy_name, rc.strategy_params);
+        strategy = owned.get();
+    }
     Simulator sim(rc.bse_path, rc.sim);
     const uint32_t s = sim.add_strategy(*strategy, rc.session());
     ResultRecorder recorder(sim, rc.output_dir, rc.sample_ns);

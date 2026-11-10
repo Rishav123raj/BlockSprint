@@ -22,8 +22,10 @@ struct RunOutcome {
 };
 
 // extra is merged into run_meta.json (after run_inputs); its "run" object gets "wall_seconds" and
-// "batches_per_second". Throws std::invalid_argument for a bad strategy name or parameter before any data
-// is read.
-RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra = nlohmann::json::object());
+// "batches_per_second". The strategy is the config's (strategy.name from the registry) unless one is given,
+// e.g. a Python strategy (P4.4); it must outlive the call. Throws std::invalid_argument for a bad strategy
+// name or parameter before any data is read.
+RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra = nlohmann::json::object(),
+                          Strategy* strategy = nullptr);
 
 } // namespace sim

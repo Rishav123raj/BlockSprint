@@ -50,6 +50,7 @@
 | 2026-11-10 | P3.18 done | `bench/bench_sim.cpp`: records/s through scan, reconstruct, synth, sim null, sim quoter. On BTCUSDT Nov 6 (26.8 M records, 74.65% coverage; i5-6300U, MSVC): reconstruct 4.32 -> **16.3 M records/s** (windowed L2 book: a 2^17-tick dense window around the best price + a map for far levels; differential test vs std::map), `PassiveQuoter` day 50.1 -> **25.1 s** (also one queue read per changed level in the synthesizer). Results identical (pinned hashes unchanged). A fully covered day projects to ~34 s: the rest is in the engine (string order IDs, per-order allocation, std::map price levels), deferred as a separate decision. `bs_sim slice` can start at the data's own snapshot. `docs/baseline/bench_sim.md`. 90 sim tests |
 | 2026-11-10 | V3, V4 | **V3:** `PassiveQuoter` filled volume is ordered best (zero latency, cancel_from_front) >= realistic (Tokyo, pro_rata) >= worst (home PC, cancel_from_back); on Nov 5 02:00-08:00 6.47 / 4.56 / 3.25 BTC. PnL is ordered the other way (-563 / -406 / -295, also before fees): the quoter has no edge, so more fills lose more. The gate is on filled volume; a 3x3 latency x queue-model test on the committed slice. **V4:** per-trade accounting in the synthesizer (exact / through better levels / short); exact on consistent random streams (asserted); on real data 51% (BTC) / 57% (ETH) of trades exact, ~11% of volume through stale levels and ~11% short, likely from 100 ms depth sampling and icebergs. 91 sim tests |
 | 2026-11-10 | P4.1, P4.2 done | pybind11 2.13.6 vendored (`external/pybind11`, headers + CMake); `blocksprint_sim` module target (`BLOCKSPRINT_BUILD_PYTHON`, off for plain CMake builds; PIC static libs). `pyproject.toml` builds it with scikit-build-core 0.10.7 (pinned): `uv sync` compiles with MSVC without a developer prompt (2 min 24 s first, ~40 s after a C++ change via `[tool.uv] cache-keys` and a kept `build-py/`, 0.2 s no-op). Module: `run(config, overrides)` (= bs_sim run, GIL released, returns run_meta), `resolve_config`, `strategy_names`, `latency_presets`; config errors are ValueError. From Python the pinned TWAP scenario reproduces the C++ hash. The recorder supervisor now uses `uv run --no-sync`. `docs/dev_setup.md`. 47 Python tests |
+| 2026-11-10 | P4.3, P4.4 done | `bs.SimConfig(dict, overrides)` (resolved config), `bs.Simulator(cfg, strategy=None, callback_mode)`.run() via `run_simulation` (now takes an optional strategy). Python strategies: any object with on_start/on_book/on_trade/on_exec/on_reject/on_timer/on_gap/on_end, driven by a C++ adapter; the GIL is released for the replay and taken only for a method the strategy defines; `every_event | on_change | timer_only` filter in C++ first. Context, ObservedBook, ExecReport, Account, OpenOrder, enums bound; prices/quantities exact 1e-8 integers (`to_fixed`/`from_fixed`). Python exceptions propagate out of run(). A do-nothing Python strategy gives the C++ null strategy's hash; the GIL test shows another thread running during a replay. One BTCUSDT day with a Python 1 s timer strategy: **31.9 s** timer_only, 38.2 s every_event (3.7 M callbacks); target < 2 min. Binding tests import the module strictly (a skip could have hidden a missing build in CI). 52 Python tests |
 
 ---
 
@@ -433,7 +434,7 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 ### Acceptance criteria
 - [ ] `uv sync` on a clean machine builds and imports `blocksprint_sim`.
 - [ ] P4.7 parity passes.
-- [ ] A one-day BTCUSDT run with a Python strategy on a 1 s timer finishes in < 2 min.
+- [x] A one-day BTCUSDT run with a Python strategy on a 1 s timer finishes in < 2 min. (31.9 s timer_only, 38.2 s every_event; 2026-11-10)
 - [ ] Tag `v2.0.0-p4`.
 
 ### Risks
@@ -670,7 +671,7 @@ Tick these off as phases complete.
 - [x] P3.15 C++ strategies  - [x] P3.16 Golden tests  - [x] P3.17 Cross-OS determinism  - [x] P3.18 Bench
 
 **Phase 4: Python Bridge**
-- [x] P4.1 pybind11  - [x] P4.2 scikit-build  - [ ] P4.3 Bindings  - [ ] P4.4 Trampoline/GIL
+- [x] P4.1 pybind11  - [x] P4.2 scikit-build  - [x] P4.3 Bindings  - [x] P4.4 Trampoline/GIL
 - [ ] P4.5 numpy results  - [ ] P4.6 Strategy base  - [ ] P4.7 Parity  - [ ] P4.8 CI wheels
 
 **Phase 5: Research Toolkit**

@@ -63,7 +63,69 @@ print(meta["output_hash"], meta["sessions"][0]["exchange_account"]["pnl"])
 - `bs.resolve_config(config, overrides)` returns the resolved config, as `bs_sim config` prints it.
 - Errors in a config (an unknown key, strategy or parameter) raise `ValueError` naming the key.
 
-Python strategies, the `Simulator` class and numpy results come in P4.3–P4.6.
+### A strategy in Python (P4.3, P4.4)
+
+```python
+import blocksprint_sim as bs
+
+class TimerQuoter:
+    """Every second: a post-only bid at the best bid."""
+    def on_start(self, ctx):
+        ctx.set_timer(1_000_000_000)                     # ns
+
+    def on_timer(self, ctx, timer_id):
+        book = ctx.book()
+        if ctx.can_trade() and book.valid():
+            ctx.send(bs.Side.BUY, bs.OrderType.LIMIT_MAKER, book.best_bid().price, bs.to_fixed("0.001"))
+        ctx.set_timer(1_000_000_000)
+
+    def on_exec(self, ctx, report):                      # an ExecReport
+        if report.type == bs.ExecType.FILL:
+            print(bs.from_fixed(report.last_qty), "@", bs.from_fixed(report.last_px))
+
+cfg = bs.SimConfig({"dataset": "...", "latency_preset": "binance_spot_tokyo_vps",
+                    "output": {"dir": "results/py_quoter"}})
+meta = bs.Simulator(cfg, TimerQuoter(), callback_mode="timer_only").run()
+```
+
+**Callbacks.** A strategy is any object with some of these methods; a missing method costs nothing:
+
+| Method | When |
+| :--- | :--- |
+| `on_start(ctx)` | at the start of the window |
+| `on_book(ctx, book)` | a depth update or snapshot reached the strategy |
+| `on_trade(ctx, trade)` | a data trade reached the strategy |
+| `on_exec(ctx, report)` | an execution report for its order |
+| `on_reject(ctx, reject)` | the exchange refused a cancel, amend or replace |
+| `on_timer(ctx, timer_id)` | a timer it set |
+| `on_gap(ctx)` | data was lost; the book is invalid until the next snapshot |
+| `on_end(ctx)` | at the end of the window |
+
+**Callback modes** filter `on_book` and `on_trade` in C++, before any Python runs:
+- `every_event`, the default, delivers both for every update;
+- `on_change` calls `on_book` only when the best bid or ask (price or quantity) changed, and delivers every trade;
+- `timer_only` delivers neither; read `ctx.book()` in `on_timer` instead.
+
+**Units.** Prices and quantities are integers in 1e-8 units, exactly as in C++. `bs.to_fixed("100.01")` gives `10001000000` and `bs.from_fixed(...)` turns it back into a decimal string. Strategies stay exact and can match a C++ strategy bit for bit.
+
+**The GIL.** It is released for the whole replay and taken only to call a method the strategy has, so other Python threads keep running.
+
+**Errors.**
+- An exception in a callback ends the run and comes out of `run()` unchanged.
+- Sending during the warm-up raises `RuntimeError`; check `ctx.can_trade()`.
+- The `ctx` and `book` objects are valid only during the callback, so don't keep them.
+
+**Speed** (BTCUSDT 2026-11-06, 26.8 M records, i5-6300U, `TimerQuoter` above with a 1 s timer):
+
+| Mode | Time | Python callbacks |
+| :--- | ---: | ---: |
+| `timer_only` | 31.9 s | 234 k |
+| `on_change` | 37.9 s | 3.54 M |
+| `every_event` | 38.2 s | 3.69 M |
+
+`bs.Simulator(cfg)` without a strategy runs the config's C++ `strategy.name`, the same as `bs.run`.
+
+numpy results and a typed Python base class come in P4.5 and P4.6.
 
 ## Troubleshooting
 

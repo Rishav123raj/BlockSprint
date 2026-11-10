@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-bs = pytest.importorskip("blocksprint_sim", reason="the extension isn't built (uv sync builds it)")
+import blocksprint_sim as bs  # built by uv sync; a missing module is a failure, not a skip
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests" / "sim" / "data" / "btcusdt_2026-11-05_0200_1m.bse"
