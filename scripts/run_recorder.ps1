@@ -24,7 +24,8 @@ if (-not (Test-Path $uv)) {
 Write-SupervisorLog "supervisor started (pid $PID), symbols $($Symbols -join ' '), archive $Out"
 while ($true) {
     $started = Get-Date
-    & $uv run python -m research.data.recorder --symbols @Symbols --out $Out *> $null
+    # --no-sync: never rebuild or reinstall the project (the C++ extension, Phase 4) on a restart
+    & $uv run --no-sync python -m research.data.recorder --symbols @Symbols --out $Out *> $null
     $code = $LASTEXITCODE
     $ran = [int]((Get-Date) - $started).TotalSeconds
     Write-SupervisorLog "recorder exited with code $code after ${ran}s; restarting in ${RestartDelaySeconds}s"

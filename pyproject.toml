@@ -1,3 +1,8 @@
+[build-system]
+# P4.2: `uv sync` builds the C++ simulator into the blocksprint_sim extension (docs/dev_setup.md)
+requires = ["scikit-build-core==0.10.7"]
+build-backend = "scikit_build_core.build"
+
 [project]
 name = "crypto-trading-engine"
 version = "2.0.0.dev0"
@@ -21,3 +26,26 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests/python"]
 pythonpath = ["."]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+cmake.version = ">=3.15"
+cmake.build-type = "Release"
+build-dir = "build-py/{wheel_tag}"   # kept between builds: only changed files recompile
+wheel.packages = ["research"]
+
+[tool.scikit-build.cmake.define]
+BLOCKSPRINT_BUILD_PYTHON = "ON"
+BLOCKSPRINT_BUILD_SERVER = "OFF"
+BLOCKSPRINT_BUILD_TESTS = "OFF"
+BLOCKSPRINT_BUILD_BENCH = "OFF"
+
+[tool.uv]
+# Rebuild the extension on `uv sync` / `uv run` when the C++ side changes
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "CMakeLists.txt" },
+    { file = "src/**/*.cpp" },
+    { file = "src/**/*.hpp" },
+    { file = "src/**/*.h" },
+]

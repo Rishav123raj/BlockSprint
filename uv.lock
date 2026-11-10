@@ -80,7 +80,7 @@ wheels = [
 [[package]]
 name = "crypto-trading-engine"
 version = "2.0.0.dev0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "numpy" },
     { name = "orjson" },

@@ -134,8 +134,9 @@ BlockSprint is built using header-only libraries cached locally under the `exter
 1. **[nlohmann/json](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/external/nlohmann/json.hpp)** (v3.11.3): High-speed JSON serialization/parsing for network events.
 2. **[asio](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/external/asio)** (v1.30.2): Standalone low-latency asynchronous TCP socket networking.
 3. **[websocketpp](file:///c:/Users/Lenovo/Desktop/Crypto_Trading_Engine/external/websocketpp)** (v0.8.2): Header-only WebSocket server framework built on Asio.
+4. **pybind11** (v2.13.6, `external/pybind11`): the `blocksprint_sim` Python module (Phase 4).
 
-For Python scripts, dependencies are defined in `pyproject.toml` and managed via `uv` or `pip`.
+For Python scripts, dependencies are defined in `pyproject.toml` and managed via `uv`. `uv sync` also builds the C++ simulator into the `blocksprint_sim` Python module (2–3 minutes the first time; see [docs/dev_setup.md](docs/dev_setup.md)).
 
 ---
 

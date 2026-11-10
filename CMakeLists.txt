@@ -14,6 +14,12 @@ option(BLOCKSPRINT_BUILD_SERVER "Build the live REST/WebSocket server" ON)
 option(BLOCKSPRINT_BUILD_TESTS "Build the unit tests" ON)
 option(BLOCKSPRINT_BUILD_BENCH "Build the engine micro-benchmark" ON)
 option(BLOCKSPRINT_BUILD_SIM "Build the simulator (sim library, bs_sim, sim_tests)" ON)
+option(BLOCKSPRINT_BUILD_PYTHON "Build the blocksprint_sim Python module (P4.1; pyproject.toml turns it on)" OFF)
+
+if(BLOCKSPRINT_BUILD_PYTHON)
+    # The static libraries end up inside a shared module
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
 
 find_package(Threads REQUIRED)
 
@@ -157,6 +163,24 @@ if(BLOCKSPRINT_BUILD_SIM)
         blocksprint_warnings(sim_tests)
         add_test(NAME sim_tests COMMAND sim_tests)
     endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# blocksprint_sim: the simulator as a Python module (Phase 4; docs/dev_setup.md)
+# ---------------------------------------------------------------------------
+if(BLOCKSPRINT_BUILD_PYTHON)
+    if(NOT BLOCKSPRINT_BUILD_SIM)
+        message(FATAL_ERROR "BLOCKSPRINT_BUILD_PYTHON needs BLOCKSPRINT_BUILD_SIM")
+    endif()
+    set(PYBIND11_FINDPYTHON ON)
+    find_package(Python 3.13 REQUIRED COMPONENTS Interpreter Development.Module)
+    add_subdirectory(external/pybind11)
+    pybind11_add_module(blocksprint_sim src/bindings/pybind_module.cpp)
+    target_link_libraries(blocksprint_sim PRIVATE sim)
+    target_compile_definitions(blocksprint_sim PRIVATE BLOCKSPRINT_VERSION="${PROJECT_VERSION}")
+    blocksprint_warnings(blocksprint_sim)
+    # scikit-build-core installs into the wheel's root: `import blocksprint_sim`
+    install(TARGETS blocksprint_sim LIBRARY DESTINATION .)
 endif()
 
 # ---------------------------------------------------------------------------

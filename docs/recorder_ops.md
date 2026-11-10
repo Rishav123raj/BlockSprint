@@ -94,7 +94,7 @@ Wants=network-online.target
 
 [Service]
 WorkingDirectory=/opt/blocksprint
-ExecStart=/usr/local/bin/uv run python -m research.data.recorder --symbols BTCUSDT ETHUSDT --out /data/raw
+ExecStart=/usr/local/bin/uv run --no-sync python -m research.data.recorder --symbols BTCUSDT ETHUSDT --out /data/raw
 Restart=always
 RestartSec=10
 User=blocksprint
