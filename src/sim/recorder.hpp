@@ -22,10 +22,86 @@
 
 #include <cstdint>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace sim {
+
+// The CSV rows in memory (P4.5), for Python: fixed-width records that numpy views without a copy. Values are
+// the CSV's in raw units: times in ns, prices, quantities and money in 1e-8, enums as their C++ codes.
+// Strings are interned: `owner` indexes ResultTables::owners, `order` indexes ResultTables::order_ids.
+// A field the CSV leaves empty holds 0 (the rule is given per field).
+struct OrderRow {
+    uint64_t sent_ns, arrive_ns;
+    uint32_t owner, order;
+    uint8_t request;                  // Request::Type
+    uint8_t side, order_type, stp;    // NEW / REPLACE only
+    uint8_t has_new_price;            // AMEND with a new price
+    uint8_t pad_[3];
+    int64_t price;                    // NEW / REPLACE only
+    int64_t quantity;                 // NEW / REPLACE / AMEND (the new total)
+    int64_t new_price;                // has_new_price only
+};
+
+struct ReportRow {
+    uint64_t exchange_ns, deliver_ns, seq;
+    uint32_t owner, order;
+    uint8_t type, reason, side, order_type;  // reason: empty when NONE
+    uint8_t liquidity;                       // FILL only
+    uint8_t pad_[7];
+    int64_t price, quantity;
+    int64_t last_px, last_qty;               // FILL only
+    int64_t cum_qty, leaves_qty;
+    int64_t fee;                             // FILL only
+    int64_t cum_fee;
+};
+
+struct RejectRow {
+    uint64_t exchange_ns, deliver_ns;
+    uint32_t owner, order;
+    uint8_t request;                 // RequestReject::Request
+    uint8_t reason;                  // empty when NONE
+    uint8_t pad_[6];
+};
+
+struct BboRow {
+    uint64_t ts_ns;
+    uint32_t owner;                  // kNoOwner: a run without strategies
+    uint32_t pad_;
+    // A side with price 0 has no level (both columns empty)
+    int64_t data_bid, data_bid_qty, data_ask, data_ask_qty;
+    int64_t book_bid, book_bid_qty, book_ask, book_ask_qty;
+    int64_t seen_bid, seen_bid_qty, seen_ask, seen_ask_qty;
+    uint64_t seen_data_ns;           // 0: the strategy has seen no data yet
+};
+
+struct PositionRow {
+    uint64_t ts_ns;
+    uint32_t owner, pad_;
+    int64_t position, cash, fees, mark, pnl;
+    uint64_t fills, maker_fills, taker_fills, open_orders;
+    int64_t base_volume, quote_volume;
+};
+
+struct ResultTables {
+    static constexpr uint32_t kNoOwner = 0xFFFFFFFFu;
+
+    std::vector<std::string> owners;     // by session
+    std::vector<std::string> order_ids;  // interned, in order of first appearance
+    std::vector<OrderRow> orders;
+    std::vector<ReportRow> reports;
+    std::vector<RejectRow> rejects;
+    std::vector<std::string> reject_texts;  // one per reject row
+    std::vector<BboRow> bbo;
+    std::vector<PositionRow> positions;
+
+    uint32_t order_index(const std::string& id);
+
+private:
+    std::unordered_map<std::string, uint32_t> order_index_;
+};
 
 class ResultRecorder final : public GatewayListener {
 public:
@@ -42,6 +118,9 @@ public:
 
     const std::string& output_hash() const { return output_hash_; }
     const std::string& dir() const { return dir_; }
+
+    // Also keeps every row in memory (P4.5). Call before sim.run(); the tables are complete after finish().
+    std::shared_ptr<ResultTables> keep_tables();
 
     // GatewayListener
     void on_request(uint32_t session, const Request& r, uint64_t arrive_at) override;
@@ -70,10 +149,14 @@ private:
     Output rejects_{"request_rejects.csv", {}, 0};
     Output bbo_{"bbo_samples.csv", {}, 0};
     Output positions_{"positions.csv", {}, 0};
+    std::shared_ptr<ResultTables> tables_;
     Price last_mark_ = 0;
     bool finished_ = false;
     std::string output_hash_;
 };
+
+// orders.csv's request column: new / cancel / amend / replace
+const char* request_type_name(Request::Type t);
 
 // What a configured run reads: the resolved config and its SHA-256, the data file, its manifest and the
 // manifest's SHA-256. For finish()'s meta.

@@ -583,6 +583,12 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   - the same seed gives identical files and hash, another seed a different hash.
 - **On real data** (BTCUSDT 02:00–03:00 UTC, the two-sided quoter, 1 s samples): 3,676 requests, 10,049 reports, 396 refused requests, 3,600 samples, about 2.5 MB. Identical output hash twice, and the recorder adds under 2% to the run time.
 
+**In memory (P4.5).** `recorder.keep_tables()` (or `run_simulation(..., keep_tables = true)`) also keeps every row as a fixed-width record: `OrderRow`, `ReportRow`, `RejectRow`, `BboRow`, `PositionRow` in `ResultTables`.
+- Values are raw: ns, 1e-8 fixed and enum codes. Owners and order IDs are interned.
+- A field the CSV leaves empty holds 0.
+- Python views these as numpy structured arrays without copying, and `research/sim/results.py` turns them into polars DataFrames equal to the CSVs (`docs/dev_setup.md`).
+- The CSVs and the output hash are unchanged.
+
 ---
 
 ## 13. Configuration and the CLI

@@ -125,7 +125,37 @@ meta = bs.Simulator(cfg, TimerQuoter(), callback_mode="timer_only").run()
 
 `bs.Simulator(cfg)` without a strategy runs the config's C++ `strategy.name`, the same as `bs.run`.
 
-numpy results and a typed Python base class come in P4.5 and P4.6.
+A typed Python base class for strategies comes in P4.6.
+
+### Results as numpy and polars (P4.5)
+
+```python
+from research.sim.results import Results
+
+res = Results.run(cfg, TimerQuoter(), callback_mode="timer_only")   # or Results.from_simulator(sim) after sim.run()
+fills = res.exec_reports[res.exec_reports["type"] == res.codes["type"].index("fill")]
+print(fills["last_qty"].sum())                   # numpy, 1e-8 units
+
+frames = res.to_polars()                         # {"orders", "exec_reports", "request_rejects", "bbo_samples", "positions"}
+frames["positions"].select("ts_ns", "pnl")
+```
+
+**numpy.** `res.orders`, `res.exec_reports`, `res.request_rejects`, `res.bbo_samples` and `res.positions` are structured arrays that view the simulator's own rows, with no copy. They stay valid after the `Simulator` is gone.
+- Units are raw: times in ns, prices, quantities and money in 1e-8, enums as codes (`res.codes["side"]` names them).
+- The `owner` column indexes `res.owners`, `order` indexes `res.order_ids`, and refused requests' texts are in `res.reject_texts`.
+- A field the CSV leaves empty holds 0. The rules are in `src/sim/recorder.hpp`; for example, `last_px` is set only on fills, and a book side with price 0 has no level.
+- The low-level call is `sim.tables()`, a dict of the same arrays.
+
+**polars.** `res.to_polars()` returns the five CSV tables, value for value (tested against the files):
+- the same columns in the same order;
+- the CSV's strings for enums, owners and order IDs;
+- nulls where the CSV is empty;
+- `*_ns` columns as UTC datetimes;
+- fixed-point columns as exact `Decimal(38, 8)`.
+
+Pass `fixed="float"` for floats (plotting) or `fixed="int"` for the raw integers, or `to_polars("positions")` for one table.
+
+**Cost** (BTCUSDT Nov 6, the C++ `PassiveQuoter`, 1 s samples): 365 k rows and 38.6 MB of tables. Keeping them adds about 4% to the run (73.1 s against 70.0 s), and the output hash is unchanged. `to_polars()` takes 1.8 s with decimals and 0.3 s with floats.
 
 ## Troubleshooting
 
@@ -134,4 +164,5 @@ numpy results and a typed Python base class come in P4.5 and P4.6.
 | `No CMAKE_CXX_COMPILER could be found` (Windows) | install Visual Studio 2022's C++ workload |
 | `Could NOT find Python ... Development.Module` | use a Python with headers: uv's managed Pythons have them; on Linux system Pythons install `python3-dev` |
 | a C++ change doesn't show up in Python | `uv sync` (a bare `python` doesn't rebuild); to force a clean build, delete `build-py/` |
+| `ZoneInfoNotFoundError: 'No time zone found with key UTC'` | `tzdata` is missing from `.venv`: `uv sync` (it's a dependency) |
 | `uv sync` removed a package you installed by hand | uv keeps `.venv` exactly as `pyproject.toml` says: add the package there (`uv add NAME`) |

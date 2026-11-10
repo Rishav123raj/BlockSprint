@@ -26,16 +26,6 @@ std::string quoted(const std::string& s) {
     return out + "\"";
 }
 
-const char* request_type_name(Request::Type t) {
-    switch (t) {
-        case Request::Type::NEW: return "new";
-        case Request::Type::CANCEL: return "cancel";
-        case Request::Type::AMEND: return "amend";
-        case Request::Type::REPLACE: return "replace";
-    }
-    return "unknown";
-}
-
 const char* event_class_name(size_t c) {
     static const char* names[] = {"market_data", "order_arrive", "strategy_md", "strategy_exec", "timer"};
     return c < 5 ? names[c] : "unknown";
@@ -64,6 +54,35 @@ std::string hex(const std::array<uint8_t, 32>& bytes) {
 }
 
 } // namespace
+
+const char* request_type_name(Request::Type t) {
+    switch (t) {
+        case Request::Type::NEW: return "new";
+        case Request::Type::CANCEL: return "cancel";
+        case Request::Type::AMEND: return "amend";
+        case Request::Type::REPLACE: return "replace";
+    }
+    return "unknown";
+}
+
+uint32_t ResultTables::order_index(const std::string& id) {
+    const auto [it, added] = order_index_.try_emplace(id, static_cast<uint32_t>(order_ids.size()));
+    if (added) {
+        order_ids.push_back(id);
+    }
+    return it->second;
+}
+
+std::shared_ptr<ResultTables> ResultRecorder::keep_tables() {
+    if (!tables_) {
+        tables_ = std::make_shared<ResultTables>();
+        SimGateway& gw = sim_.gateway();
+        for (uint32_t s = 0; s < gw.session_count(); ++s) {
+            tables_->owners.push_back(gw.owner(s));
+        }
+    }
+    return tables_;
+}
 
 ResultRecorder::ResultRecorder(Simulator& sim, const std::string& dir, uint64_t sample_ns) : sim_(sim), dir_(dir) {
     fs::create_directories(dir_);
@@ -111,6 +130,28 @@ void ResultRecorder::on_request(uint32_t session, const Request& r, uint64_t arr
             o << ",,,,,\n";
             break;
     }
+    if (tables_) {
+        OrderRow t{};
+        t.sent_ns = r.sent_at;
+        t.arrive_ns = arrive_at;
+        t.owner = session;
+        t.order = tables_->order_index(r.order_id);
+        t.request = static_cast<uint8_t>(r.type);
+        if (r.type == Request::Type::NEW || r.type == Request::Type::REPLACE) {
+            t.side = static_cast<uint8_t>(r.side);
+            t.order_type = static_cast<uint8_t>(r.order_type);
+            t.stp = static_cast<uint8_t>(r.stp);
+            t.price = r.price;
+        }
+        if (r.type != Request::Type::CANCEL) {
+            t.quantity = r.quantity;
+        }
+        if (r.type == Request::Type::AMEND && r.new_price) {
+            t.has_new_price = 1;
+            t.new_price = *r.new_price;
+        }
+        tables_->orders.push_back(t);
+    }
 }
 
 void ResultRecorder::on_report(uint32_t session, const ExecReport& r, uint64_t deliver_at) {
@@ -128,6 +169,30 @@ void ResultRecorder::on_report(uint32_t session, const ExecReport& r, uint64_t d
     o << ',' << px(r.cum_qty) << ',' << px(r.leaves_qty) << ','
       << (r.type == ExecType::FILL ? liquidityToString(r.liquidity) : std::string()) << ','
       << (r.type == ExecType::FILL ? px(r.fee) : std::string()) << ',' << px(r.cum_fee) << '\n';
+    if (tables_) {
+        ReportRow t{};
+        t.exchange_ns = r.timestamp;
+        t.deliver_ns = deliver_at;
+        t.seq = r.seq;
+        t.owner = session;
+        t.order = tables_->order_index(r.order_id);
+        t.type = static_cast<uint8_t>(r.type);
+        t.reason = static_cast<uint8_t>(r.reason);
+        t.side = static_cast<uint8_t>(r.side);
+        t.order_type = static_cast<uint8_t>(r.order_type);
+        t.price = r.price;
+        t.quantity = r.quantity;
+        if (r.type == ExecType::FILL) {
+            t.liquidity = static_cast<uint8_t>(r.liquidity);
+            t.last_px = r.last_px;
+            t.last_qty = r.last_qty;
+            t.fee = r.fee;
+        }
+        t.cum_qty = r.cum_qty;
+        t.leaves_qty = r.leaves_qty;
+        t.cum_fee = r.cum_fee;
+        tables_->reports.push_back(t);
+    }
 }
 
 void ResultRecorder::on_request_reject(uint32_t session, const RequestReject& r, uint64_t deliver_at) {
@@ -135,6 +200,11 @@ void ResultRecorder::on_request_reject(uint32_t session, const RequestReject& r,
                   << request_name(r.request) << ',' << r.order_id << ','
                   << (r.reason != ExecReason::NONE ? execReasonToString(r.reason) : std::string()) << ','
                   << quoted(r.text) << '\n';
+    if (tables_) {
+        tables_->rejects.push_back(RejectRow{r.exchange_time, deliver_at, session, tables_->order_index(r.order_id),
+                                             static_cast<uint8_t>(r.request), static_cast<uint8_t>(r.reason), {}});
+        tables_->reject_texts.push_back(r.text);
+    }
 }
 
 Price ResultRecorder::mark() {
@@ -172,6 +242,25 @@ void ResultRecorder::sample(uint64_t t) {
     book_cols += ',';
     book_cols += d.asks.empty() ? "," : px(d.asks[0].price) + ',' + px(d.asks[0].quantity);
 
+    BboRow base{};
+    base.ts_ns = t;
+    if (!bid.empty()) {
+        base.data_bid = bid[0].px * h.tick_size;
+        base.data_bid_qty = bid[0].qty * h.lot_size;
+    }
+    if (!ask.empty()) {
+        base.data_ask = ask[0].px * h.tick_size;
+        base.data_ask_qty = ask[0].qty * h.lot_size;
+    }
+    if (!d.bids.empty()) {
+        base.book_bid = d.bids[0].price;
+        base.book_bid_qty = d.bids[0].quantity;
+    }
+    if (!d.asks.empty()) {
+        base.book_ask = d.asks[0].price;
+        base.book_ask_qty = d.asks[0].quantity;
+    }
+
     SimGateway& gw = sim_.gateway();
     for (uint32_t s = 0; s < gw.session_count(); ++s) {
         const ObservedBook& seen = gw.context(s).book();
@@ -181,9 +270,27 @@ void ResultRecorder::sample(uint64_t t) {
                   << (sb ? px(sb->price) + ',' + px(sb->qty) : std::string(",")) << ','
                   << (sa ? px(sa->price) + ',' + px(sa->qty) : std::string(",")) << ','
                   << (seen.batches() ? std::to_string(seen.data_time()) : std::string()) << '\n';
+        if (tables_) {
+            BboRow r = base;
+            r.owner = s;
+            if (sb) {
+                r.seen_bid = sb->price;
+                r.seen_bid_qty = sb->qty;
+            }
+            if (sa) {
+                r.seen_ask = sa->price;
+                r.seen_ask_qty = sa->qty;
+            }
+            r.seen_data_ns = seen.batches() ? seen.data_time() : 0;
+            tables_->bbo.push_back(r);
+        }
     }
     if (gw.session_count() == 0) {
         row(bbo_) << t << ',' << ',' << data_cols << ',' << book_cols << ",,,,,\n";
+        if (tables_) {
+            base.owner = ResultTables::kNoOwner;
+            tables_->bbo.push_back(base);
+        }
     }
     write_positions(t);
 }
@@ -197,6 +304,11 @@ void ResultRecorder::write_positions(uint64_t t) {
                         << ',' << px(m) << ',' << px(a.pnl(m)) << ',' << a.fills << ',' << a.maker_fills << ','
                         << a.taker_fills << ',' << gw.exchange_open_orders(s) << ',' << px(a.base_volume) << ','
                         << px(a.quote_volume) << '\n';
+        if (tables_) {
+            tables_->positions.push_back(PositionRow{t, s, 0, a.position, a.cash, a.fees, m, a.pnl(m), a.fills,
+                                                     a.maker_fills, a.taker_fills, gw.exchange_open_orders(s),
+                                                     a.base_volume, a.quote_volume});
+        }
     }
 }
 

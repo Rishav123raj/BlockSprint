@@ -8,7 +8,7 @@
 
 namespace sim {
 
-RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra, Strategy* strategy) {
+RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra, Strategy* strategy, bool keep_tables) {
     std::unique_ptr<Strategy> owned;
     if (!strategy) {
         owned = make_strategy(rc.strategy_name, rc.strategy_params);
@@ -17,6 +17,7 @@ RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra, Strategy* s
     Simulator sim(rc.bse_path, rc.sim);
     const uint32_t s = sim.add_strategy(*strategy, rc.session());
     ResultRecorder recorder(sim, rc.output_dir, rc.sample_ns);
+    std::shared_ptr<ResultTables> tables = keep_tables ? recorder.keep_tables() : nullptr;
 
     const auto t0 = std::chrono::steady_clock::now();
     sim.run();
@@ -40,6 +41,7 @@ RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra, Strategy* s
     out.output_hash = recorder.output_hash();
     out.session = sim.gateway().stats(s);
     out.account = sim.gateway().exchange_account(s);
+    out.tables = std::move(tables);
     return out;
 }
 

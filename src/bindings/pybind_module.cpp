@@ -16,15 +16,21 @@
 //
 // Prices and quantities are integers in 1e-8 units, as in C++ (exact; to_fixed / from_fixed convert).
 // The Context and ObservedBook passed to a callback are valid during that callback only.
+//
+// P4.5: Simulator.tables() returns the run's outputs as numpy structured arrays that view the recorder's
+// rows (no copy; each array keeps the rows alive). result_codes() names the enum codes with the CSV's
+// strings. research/sim/results.py wraps both (Results, to_polars).
 #include "config.hpp"
 #include "run.hpp"
 #include "strategies/registry.hpp"
 
+#include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
 #include <nlohmann/json.hpp>
 
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -167,11 +173,69 @@ private:
 };
 
 // A run: the config, and optionally a Python strategy in place of the config's C++ one
+// A numpy view of rows that live in tables: the array's base holds a reference to the tables
+template <class Row>
+py::array view(const std::shared_ptr<ResultTables>& tables, const std::vector<Row>& rows) {
+    auto* keep = new std::shared_ptr<ResultTables>(tables);
+    py::capsule base(keep, [](void* p) { delete static_cast<std::shared_ptr<ResultTables>*>(p); });
+    return py::array_t<Row>({static_cast<py::ssize_t>(rows.size())}, {static_cast<py::ssize_t>(sizeof(Row))},
+                            rows.data(), base);
+}
+
+py::dict tables_dict(const std::shared_ptr<ResultTables>& t) {
+    py::dict d;
+    d["owners"] = t->owners;
+    d["order_ids"] = t->order_ids;
+    d["orders"] = view(t, t->orders);
+    d["exec_reports"] = view(t, t->reports);
+    d["request_rejects"] = view(t, t->rejects);
+    d["reject_texts"] = t->reject_texts;
+    d["bbo_samples"] = view(t, t->bbo);
+    d["positions"] = view(t, t->positions);
+    return d;
+}
+
+// Code -> the CSV's string, per enum column of the result tables
+py::dict result_codes() {
+    py::dict d;
+    std::vector<std::string> v;
+    for (Side x : {Side::BUY, Side::SELL}) v.push_back(sideToString(x));
+    d["side"] = v;
+    v.clear();
+    for (int c = 0; c <= static_cast<int>(OrderType::LIMIT_MAKER); ++c) v.push_back(orderTypeToString(OrderType(c)));
+    d["order_type"] = v;
+    v.clear();
+    for (int c = 0; c <= static_cast<int>(StpPolicy::CANCEL_BOTH); ++c) v.push_back(stpPolicyToString(StpPolicy(c)));
+    d["stp"] = v;
+    v.clear();
+    for (int c = 0; c <= static_cast<int>(Request::Type::REPLACE); ++c) v.push_back(request_type_name(Request::Type(c)));
+    d["request"] = v;
+    v.clear();
+    for (int c = 0; c <= static_cast<int>(ExecType::REJECTED); ++c) v.push_back(execTypeToString(ExecType(c)));
+    d["type"] = v;
+    v.clear();
+    for (int c = 0; c <= static_cast<int>(ExecReason::MAX_OPEN_ORDERS); ++c) {
+        v.push_back(execReasonToString(ExecReason(c)));
+    }
+    d["reason"] = v;
+    v.clear();
+    for (int c = 0; c <= static_cast<int>(Liquidity::TAKER); ++c) v.push_back(liquidityToString(Liquidity(c)));
+    d["liquidity"] = v;
+    v.clear();
+    for (int c = 0; c <= static_cast<int>(RequestReject::Request::REPLACE); ++c) {
+        v.push_back(request_name(RequestReject::Request(c)));
+    }
+    d["reject_request"] = v;
+    return d;
+}
+
 struct PySimulator {
     RunConfig rc;
     py::object strategy;  // None: strategy.name from the registry
     CallbackMode mode;
     bool ran = false;
+    py::object meta = py::none();
+    std::shared_ptr<ResultTables> tables;
 
     py::object run() {
         if (ran) {
@@ -188,13 +252,21 @@ struct PySimulator {
         RunOutcome outcome;
         {
             py::gil_scoped_release release;  // the adapter takes it back for each Python callback
-            outcome = run_simulation(rc, extra, adapter ? &*adapter : nullptr);
+            outcome = run_simulation(rc, extra, adapter ? &*adapter : nullptr, /*keep_tables=*/true);
         }
-        py::object meta = to_python(outcome.meta);
+        meta = to_python(outcome.meta);
         if (adapter) {
             meta["python_callbacks"] = adapter->callbacks();
         }
+        tables = std::move(outcome.tables);
         return meta;
+    }
+
+    py::dict get_tables() const {
+        if (!tables) {
+            throw std::logic_error("Simulator.tables: run() first");
+        }
+        return tables_dict(tables);
     }
 };
 
@@ -207,6 +279,18 @@ PYBIND11_MODULE(blocksprint_sim, m) {
               "latency and queue models (docs/simulator_architecture.md, docs/dev_setup.md)";
     m.attr("__version__") = BLOCKSPRINT_VERSION;
     m.attr("FIXED_SCALE") = kFixedScale;
+
+    // numpy dtypes of the result rows (recorder.hpp); padding is left out of the fields, kept in the itemsize
+    PYBIND11_NUMPY_DTYPE(OrderRow, sent_ns, arrive_ns, owner, order, request, side, order_type, stp, has_new_price, price,
+                             quantity, new_price);
+    PYBIND11_NUMPY_DTYPE(ReportRow, exchange_ns, deliver_ns, seq, owner, order, type, reason, side, order_type, liquidity,
+                             price, quantity, last_px, last_qty, cum_qty, leaves_qty, fee, cum_fee);
+    PYBIND11_NUMPY_DTYPE(RejectRow, exchange_ns, deliver_ns, owner, order, request, reason);
+    PYBIND11_NUMPY_DTYPE(BboRow, ts_ns, owner, data_bid, data_bid_qty, data_ask, data_ask_qty, book_bid, book_bid_qty,
+                             book_ask, book_ask_qty, seen_bid, seen_bid_qty, seen_ask, seen_ask_qty, seen_data_ns);
+    PYBIND11_NUMPY_DTYPE(PositionRow, ts_ns, owner, position, cash, fees, mark, pnl, fills, maker_fills, taker_fills,
+                             open_orders, base_volume, quote_volume);
+
 
     // std::invalid_argument (bad config keys, unknown strategy or parameter) arrives as ValueError;
     // std::logic_error (e.g. trading during the warm-up) as RuntimeError
@@ -423,7 +507,15 @@ PYBIND11_MODULE(blocksprint_sim, m) {
              py::arg("config"), py::arg("strategy") = py::none(), py::arg("callback_mode") = "every_event")
         .def("run", &PySimulator::run,
              "Runs once and writes the results directory (output.dir). Returns run_meta.json as a dict; with a "
-             "Python strategy, python_callbacks counts the calls made.");
+             "Python strategy, python_callbacks counts the calls made.")
+        .def_readonly("meta", &PySimulator::meta, "run()'s result (None before the run)")
+        .def("tables", &PySimulator::get_tables,
+             "After run(): the outputs as numpy structured arrays without a copy (orders, exec_reports, "
+             "request_rejects, bbo_samples, positions), plus owners, order_ids and reject_texts, which the "
+             "integer owner / order / row columns index. Raw units: ns, 1e-8 fixed, enum codes (result_codes()). "
+             "research.sim.results.Results wraps this.");
+
+    m.def("result_codes", &result_codes, "Enum code -> the CSV's string, per enum column of Simulator.tables()");
 
     m.def(
         "run",

@@ -4,10 +4,12 @@
 // simulator with the result recorder attached, and writes the results directory.
 #include "config.hpp"
 #include "gateway.hpp"
+#include "recorder.hpp"
 #include "simulator.hpp"
 
 #include <nlohmann/json.hpp>
 
+#include <memory>
 #include <string>
 
 namespace sim {
@@ -19,13 +21,14 @@ struct RunOutcome {
     SessionStats session;     // the strategy's
     Account account;          // the strategy's exchange account at the end
     double wall_seconds = 0;
+    std::shared_ptr<ResultTables> tables;  // with keep_tables: the CSV rows in memory (P4.5)
 };
 
 // extra is merged into run_meta.json (after run_inputs); its "run" object gets "wall_seconds" and
 // "batches_per_second". The strategy is the config's (strategy.name from the registry) unless one is given,
 // e.g. a Python strategy (P4.4); it must outlive the call. Throws std::invalid_argument for a bad strategy
-// name or parameter before any data is read.
+// name or parameter before any data is read. keep_tables also returns the output rows in memory.
 RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra = nlohmann::json::object(),
-                          Strategy* strategy = nullptr);
+                          Strategy* strategy = nullptr, bool keep_tables = false);
 
 } // namespace sim

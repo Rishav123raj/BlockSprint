@@ -189,6 +189,41 @@ TEST_CASE("the same run twice in one process gives the same hash") {
     CHECK(run(s.config, a.str()).output_hash == run(s.config, b.str()).output_hash);
 }
 
+TEST_CASE("keeping the rows in memory (P4.5) changes nothing and keeps every CSV row") {
+    const Scenario s = scenarios().front();
+    TempPath dir("");
+    json cfg = s.config;
+    cfg["dataset"] = kFixture;
+    cfg["output"]["dir"] = dir.str();
+    const RunOutcome out = run_simulation(resolve_run_config(cfg), json::object(), nullptr, /*keep_tables=*/true);
+    CHECK(out.output_hash == s.output_hash);
+    REQUIRE(out.tables);
+    const ResultTables& t = *out.tables;
+    const json& rows = out.meta["outputs"];
+    CHECK(t.orders.size() == rows["orders.csv"]["rows"].get<size_t>());
+    CHECK(t.reports.size() == rows["exec_reports.csv"]["rows"].get<size_t>());
+    CHECK(t.rejects.size() == rows["request_rejects.csv"]["rows"].get<size_t>());
+    CHECK(t.reject_texts.size() == t.rejects.size());
+    CHECK(t.bbo.size() == rows["bbo_samples.csv"]["rows"].get<size_t>());
+    CHECK(t.positions.size() == rows["positions.csv"]["rows"].get<size_t>());
+    REQUIRE(t.owners.size() == 1);
+
+    // Interned order IDs: every row's index is valid, and each ID was sent by a NEW
+    uint64_t fills = 0;
+    for (const ReportRow& r : t.reports) {
+        REQUIRE(r.order < t.order_ids.size());
+        fills += r.type == static_cast<uint8_t>(ExecType::FILL);
+    }
+    CHECK(fills == out.account.fills);
+    size_t news = 0;
+    for (const OrderRow& o : t.orders) news += o.request == static_cast<uint8_t>(Request::Type::NEW);
+    CHECK(news == t.order_ids.size());
+    const PositionRow& last = t.positions.back();
+    CHECK(last.position == out.account.position);
+    CHECK(last.cash == out.account.cash);
+    CHECK(last.fills == out.account.fills);
+}
+
 TEST_CASE("gate V3: optimistic assumptions never fill PassiveQuoter less (latency x queue model)") {
     // Best: no latency, cancels from the front (the quote moves up fastest). Worst: home-PC latency,
     // cancels from the back. Filled volume must not increase along either axis towards the worst case.
