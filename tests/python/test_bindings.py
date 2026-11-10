@@ -35,13 +35,14 @@ def config(tmp_path, **extra):
 @pytest.mark.skipif(os.environ.get("BLOCKSPRINT_EXPECT_INSTALLED") != "1",
                     reason="CI's wheel test (P4.8) sets BLOCKSPRINT_EXPECT_INSTALLED=1")
 def test_the_installed_wheel_is_what_is_tested():
-    # When CI tests a built wheel, both packages must come from the wheel, not from the source tree
+    # When CI tests a built wheel, both packages must come from the wheel, not from the source tree (the
+    # environment itself may sit inside the checkout, so the test is "in a site-packages", not "outside ROOT")
     import research
 
     for module in (bs, research):
         path = Path(module.__file__).resolve()
         assert "site-packages" in path.parts, path
-        assert ROOT not in path.parents, path
+        assert ROOT / "research" not in path.parents, path
 
 
 def test_module_basics():
