@@ -122,6 +122,9 @@ std::vector<bse::Record> slice(Replayer& replayer, int64_t from, int64_t to) {
             r.apply(b);
             continue;
         }
+        if (!started && !r.valid() && b.kind == BatchKind::SNAPSHOT) {
+            started = true;  // the data's own snapshot establishes the book
+        }
         if (!started) {
             if (!r.valid()) {
                 throw std::invalid_argument("slice: the book isn't valid at the start (before the first snapshot, "

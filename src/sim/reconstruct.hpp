@@ -61,8 +61,9 @@ void write_checkpoint(std::ostream& out, uint64_t batch, int64_t ts, const Recon
 
 // A self-contained piece of a file, e.g. a test fixture (P3.17, bs_sim slice): the book at `from` as one
 // synthetic snapshot at `from` (FROM_SNAPSHOT | SYNTHETIC_SNAPSHOT, every level), then every batch with
-// from <= ts_local < to, unchanged. Throws std::invalid_argument if the book isn't valid at `from` (before
-// the first snapshot, or in a gap). Replays from the start of the file.
+// from <= ts_local < to, unchanged. If the book isn't valid at `from` (before the first snapshot, or in a
+// gap), the slice must start with a snapshot of the data; otherwise throws std::invalid_argument. Replays
+// from the start of the file.
 std::vector<bse::Record> slice(Replayer& replayer, int64_t from, int64_t to);
 
 } // namespace sim

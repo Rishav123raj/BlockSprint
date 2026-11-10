@@ -136,9 +136,25 @@ TEST_CASE("slice: the book at the start as one snapshot, then the records unchan
         CHECK(la == lb);
     }
 
-    CHECK_THROWS_WITH_AS(slice(rp, 35 * static_cast<int64_t>(kMs), 45 * static_cast<int64_t>(kMs)),
+    // In the gap the next batch is the resync snapshot: the slice starts with it
+    CHECK(slice(rp, 35 * static_cast<int64_t>(kMs), 45 * static_cast<int64_t>(kMs)).size() == 4);
+    // ... but a depth event first can't be applied to an unknown book
+    Stream bad;
+    bad.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+    bad.r.push_back(Stream::rec(10 * static_cast<int64_t>(kMs), bse::GAP, 0, 0, 0, bse::LAST_IN_BATCH));
+    bad.depth(15, {{BID, 10000, 4}});
+    bad.snapshot(20, {{BID, 10000, 4}, {ASK, 10010, 2}});
+    TempFile fb;
+    bad.write(fb);
+    Replayer rb_(fb.str());
+    CHECK_THROWS_WITH_AS(slice(rb_, 12 * static_cast<int64_t>(kMs), 30 * static_cast<int64_t>(kMs)),
                          doctest::Contains("isn't valid at the start"), std::invalid_argument);
     CHECK_THROWS_AS(slice(rp, 12, 12), std::invalid_argument);
+    // Starting at the data's own snapshot (here the start of the file): copied as it is
+    const auto head = slice(rp, 0, 12 * static_cast<int64_t>(kMs));
+    CHECK(head.size() == 4 + 3);  // the snapshot (begin, 2 levels, end) and the depth event at 10 (3 levels)
+    CHECK(head[0].flags == bse::FROM_SNAPSHOT);
+
 }
 
 TEST_CASE("the fixture is the committed slice") {

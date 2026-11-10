@@ -702,7 +702,7 @@ MSVC (Windows) and GCC (MinGW, Windows) gave identical hashes before they were p
 
 When a change is meant to alter results, the failing test prints the new hashes; update them and say why in the commit. A hash that changes on one platform only is a determinism bug.
 
-The fixture comes from `bs_sim slice` (§13.2), which writes the book at `--from` as one synthetic snapshot and then every record up to `--to`. On the real file, the slice rebuilds the full book (about 9,800 levels) identically at 4 times in the window. `.gitattributes` marks `*.bse` as binary.
+The fixture comes from `bs_sim slice` (§13.2), which writes the book at `--from` as one synthetic snapshot and then every record up to `--to`. A slice that starts where the book is unknown (before the first snapshot, or in a gap) starts at the data's own next snapshot, or is refused if a depth event comes first. On the real file, the slice rebuilds the full book (about 9,800 levels) identically at 4 times in the window. `.gitattributes` marks `*.bse` as binary.
 
 ---
 
@@ -721,7 +721,7 @@ The fixture comes from `bs_sim slice` (§13.2), which writes the book at `--from
 - BTCUSDT: 108 of 108, top 20 per side, across 530,466 book batches including 2 gaps and their resyncs;
 - ETHUSDT: 264 of 264.
 
-A one-lot change in a dump is caught (negative control). The full day replays at 3.4–4.6 M records/s with `std::map` levels; the 5 M target is P3.18 work.
+A one-lot change in a dump is caught (negative control). The full day replayed at 3.4–4.6 M records/s with `std::map` levels. Since P3.18's windowed L2 book it replays at 16.3 M records/s (`docs/baseline/bench_sim.md`).
 
 **Golden scenarios (P3.16):** hand-written tiny `.bse` fixtures, each with expected fills computed by hand *before* the code:
 - the queue ahead is consumed by trades;
@@ -777,7 +777,7 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P3.15 | Reference strategies: `passive_quoter`, `twap_taker` (§11.4) | done |
 | P3.16 | Golden scenarios end to end: `tests/sim/golden/*.golden` through the whole simulator | done |
 | P3.17 | Cross-platform determinism: pinned output hashes on a committed slice, run in CI on MSVC and GCC (§14) | done |
-| P3.18 | Benchmarks | next |
+| P3.18 | `bench_sim`; windowed L2 book; one queue read per changed level. Replay-only 16.3 M records/s; a `PassiveQuoter` day in 25 s (`docs/baseline/bench_sim.md`) | done |
 
 ---
 
@@ -801,7 +801,7 @@ src/sim/
   mmap_file.hpp/.cpp      read-only file mapping
   bse.hpp                 .bse constants, header and record structs
   replayer.hpp/.cpp       header validation, record and batch iteration
-  l2_book.hpp             pure L2 book (ticks/lots)
+  l2_book.hpp             pure L2 book (ticks/lots): a dense window around the best price + a map for far levels (P3.18)
   reconstruct.hpp/.cpp    reconstruction mode: checkpoints, top-N dumps; slice (P3.17)
   queue_models.hpp        five cancel-placement models (P3.7)
   synthesizer.hpp/.cpp    L2 -> L3 into the engine; consistency checks (P3.6)
@@ -827,7 +827,7 @@ tests/sim/                doctest: rng, event queue, replayer, reconstruction, q
                           determinism_test.cpp + data/btcusdt_2026-11-05_0200_1m.bse (P3.17: pinned hashes)
 configs/sim/              example run configs
 research/sim/check_reconstruct.py   V0: compares bs_sim reconstruct dumps with the Python oracle
-bench/bench_sim.cpp       (P3.18)
+bench/bench_sim.cpp       records/s through each layer: scan, reconstruct, synth, sim null, sim quoter (P3.18)
 ```
 
 CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable), `sim_tests` (doctest).

@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <map>
 #include <random>
 #include <sstream>
 #include <string>
@@ -167,6 +169,70 @@ TEST_CASE("an empty file has a header and no batches") {
 } // TEST_SUITE("bse")
 
 TEST_SUITE("reconstruct") {
+
+TEST_CASE("L2Book matches a std::map reference through drift, far levels and window moves") {
+    // Tiny windows so that levels keep moving between the window and the far map, and the window moves
+    for (int64_t window : {int64_t{8}, int64_t{64}}) {
+        CAPTURE(window);
+        L2Book book(window);
+        std::map<int64_t, int64_t, std::greater<int64_t>> ref_bids;
+        std::map<int64_t, int64_t> ref_asks;
+        uint64_t state = 12345 + static_cast<uint64_t>(window);
+        auto next = [&state]() {
+            state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+            return state >> 33;
+        };
+        int64_t mid = 10000;
+        std::vector<Level> got, want;
+        for (int step = 0; step < 200000; ++step) {
+            if (step % 50 == 0) mid += static_cast<int64_t>(next() % 21) - 10;   // drift
+            if (step % 40000 == 39999) {
+                book.clear();
+                ref_bids.clear();
+                ref_asks.clear();
+            }
+            const uint8_t side = static_cast<uint8_t>(next() % 2);
+            // Mostly near the market, sometimes far away
+            const int64_t spread = next() % 10 == 0 ? 2000 : 40;
+            int64_t px = mid + static_cast<int64_t>(next() % static_cast<uint64_t>(spread)) + 1;
+            if (side == 0) px = mid - (px - mid);
+            const int64_t qty = next() % 3 == 0 ? 0 : static_cast<int64_t>(next() % 100) + 1;
+            book.set(side, px, qty);
+            if (side == 0) {
+                if (qty) ref_bids[px] = qty; else ref_bids.erase(px);
+            } else {
+                if (qty) ref_asks[px] = qty; else ref_asks.erase(px);
+            }
+
+            CHECK(book.qty(side, px) == qty);
+            REQUIRE(book.levels(0) == ref_bids.size());
+            REQUIRE(book.levels(1) == ref_asks.size());
+            const auto bb = book.best_bid();
+            REQUIRE(bb.has_value() == !ref_bids.empty());
+            if (bb) REQUIRE(*bb == (Level{ref_bids.begin()->first, ref_bids.begin()->second}));
+            const auto ba = book.best_ask();
+            REQUIRE(ba.has_value() == !ref_asks.empty());
+            if (ba) REQUIRE(*ba == (Level{ref_asks.begin()->first, ref_asks.begin()->second}));
+            if (step % 97 == 0) {
+                for (uint8_t sd = 0; sd < 2; ++sd) {
+                    const size_t n = step % 2 ? 5 : static_cast<size_t>(-1);
+                    book.top(sd, n, got);
+                    want.clear();
+                    if (sd == 0) {
+                        for (auto it = ref_bids.begin(); it != ref_bids.end() && want.size() < n; ++it) want.push_back({it->first, it->second});
+                    } else {
+                        for (auto it = ref_asks.begin(); it != ref_asks.end() && want.size() < n; ++it) want.push_back({it->first, it->second});
+                    }
+                    REQUIRE(got == want);
+                }
+                // A random lookup anywhere
+                const int64_t probe = mid + static_cast<int64_t>(next() % 4001) - 2000;
+                REQUIRE(book.qty(0, probe) == (ref_bids.count(probe) ? ref_bids[probe] : 0));
+                REQUIRE(book.qty(1, probe) == (ref_asks.count(probe) ? ref_asks[probe] : 0));
+            }
+        }
+    }
+}
 
 TEST_CASE("the book follows snapshots, deltas and gaps like the Python oracle") {
     TempFile f;

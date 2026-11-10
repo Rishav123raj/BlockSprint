@@ -103,13 +103,18 @@ private:
     void apply_snapshot(const Batch& batch);
     void apply_trade(const bse::Record& r);
     void apply_gap();
-    void reconcile();  // applies changes_: decreases first, then increases
+    // Applies changes_: decreases first, then increases. unique: no level appears twice in changes_, so
+    // each level is read from the engine once (P3.18)
+    void reconcile(bool unique);
+    bool changes_unique();
 
     // Reads a level's queue into slots_ / queue_; returns its synthetic quantity
     int64_t scan(Side side, Price price);
     // Removes up to `amount` of synthetic quantity at a level, chosen by the queue model or from the front;
     // returns the quantity removed
     int64_t remove(Side side, Price price, int64_t amount, bool from_front);
+    // The same, on the level scan() just read (slots_ / queue_ are current)
+    int64_t remove_scanned(Price price, int64_t synthetic, int64_t amount, bool from_front);
     // Adds synthetic quantity at the back of a level
     void add(Side side, Price price, int64_t amount);
     std::string next_id();
@@ -125,6 +130,8 @@ private:
 
     // Scratch, reused across batches
     std::vector<Change> changes_;
+    std::vector<int64_t> after_decreases_;  // per change: synthetic quantity after the decreases
+    std::vector<uint64_t> keys_;            // for changes_unique
     std::vector<QueueSlot> slots_;
     std::vector<const Order*> queue_;  // the orders behind slots_; valid until the next engine call
     std::vector<int64_t> take_;

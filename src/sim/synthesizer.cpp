@@ -1,5 +1,6 @@
 #include "synthesizer.hpp"
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -55,7 +56,17 @@ void Synthesizer::apply_depth(const Batch& batch) {
         data_.set(r->side, r->px, r->qty);
         changes_.push_back(Change{r->side, r->px});
     }
-    reconcile();
+    reconcile(changes_unique());
+}
+
+// One depth event lists each price once; checked rather than assumed (hand-written files may not)
+bool Synthesizer::changes_unique() {
+    keys_.clear();
+    for (const Change& c : changes_) {
+        keys_.push_back((static_cast<uint64_t>(c.side) << 63) | static_cast<uint64_t>(c.px));
+    }
+    std::sort(keys_.begin(), keys_.end());
+    return std::adjacent_find(keys_.begin(), keys_.end()) == keys_.end();
 }
 
 void Synthesizer::apply_snapshot(const Batch& batch) {
@@ -74,25 +85,33 @@ void Synthesizer::apply_snapshot(const Batch& batch) {
         changes_.push_back(Change{r->side, r->px});
     }
     synced_ = true;
-    reconcile();
+    reconcile(false);  // a level the book had and the snapshot has is listed twice
 }
 
-void Synthesizer::reconcile() {
-    // Decreases first: until every level that shrinks has shrunk, an addition could cross a stale level
-    for (const Change& c : changes_) {
-        const Side side = book_side(c.side);
+void Synthesizer::reconcile(bool unique) {
+    // Decreases first: until every level that shrinks has shrunk, an addition could cross a stale level.
+    // A change at one price never alters the synthetic quantity at another (synthetic orders don't trade
+    // with each other; a crossing fill takes strategy orders only), so with unique levels the quantity left
+    // after the decreases is what the increases start from, without reading the level again.
+    after_decreases_.resize(changes_.size());
+    for (size_t i = 0; i < changes_.size(); ++i) {
+        const Change& c = changes_[i];
         const Price price = c.px * options_.tick_size;
         const int64_t target = data_.qty(c.side, c.px) * options_.lot_size;
-        const int64_t synthetic = scan(side, price);
+        int64_t synthetic = scan(book_side(c.side), price);
         if (synthetic > target) {
-            stats_.cancelled_qty += remove(side, price, synthetic - target, false);
+            const int64_t removed = remove_scanned(price, synthetic, synthetic - target, false);
+            stats_.cancelled_qty += removed;
+            synthetic -= removed;
         }
+        after_decreases_[i] = synthetic;
     }
-    for (const Change& c : changes_) {
+    for (size_t i = 0; i < changes_.size(); ++i) {
+        const Change& c = changes_[i];
         const Side side = book_side(c.side);
         const Price price = c.px * options_.tick_size;
         const int64_t target = data_.qty(c.side, c.px) * options_.lot_size;
-        const int64_t synthetic = scan(side, price);
+        const int64_t synthetic = unique ? after_decreases_[i] : scan(side, price);
         if (synthetic < target) {
             add(side, price, target - synthetic);
         }
@@ -175,7 +194,10 @@ int64_t Synthesizer::scan(Side side, Price price) {
 int64_t Synthesizer::synthetic_qty(Side side, Price price) { return scan(side, price); }
 
 int64_t Synthesizer::remove(Side side, Price price, int64_t amount, bool from_front) {
-    const int64_t synthetic = scan(side, price);
+    return remove_scanned(price, scan(side, price), amount, from_front);
+}
+
+int64_t Synthesizer::remove_scanned(Price price, int64_t synthetic, int64_t amount, bool from_front) {
     amount = std::min(amount, synthetic);
     if (amount <= 0) {
         return 0;
