@@ -26,10 +26,10 @@ def meta(out, date="2026-01-01"):
     return json.loads((partition_dir(out, SYMBOL, date) / "meta.json").read_text())
 
 
-def run(raw, tmp_path, dates=None):
+def run(raw, tmp_path, dates=None, stale_after_s=10.0):
     raw.close()
     out = tmp_path / "norm"
-    normalize_symbol(raw.root, out, SYMBOL, dates)
+    normalize_symbol(raw.root, out, SYMBOL, dates, stale_after_s=stale_after_s)
     return out
 
 
@@ -77,7 +77,8 @@ def test_gap_starts_a_new_segment_that_resyncs_from_the_next_snapshot(raw, tmp_p
     out = run(raw, tmp_path)
     book = rows(raw.root, out, "book.parquet")
     gap = [r for r in book if r[5] == KIND_GAP]
-    assert gap == [(T0 + 10 * MS, T0 + 10 * MS, 105, 110, 1, KIND_GAP, 0, 0, 0, FLAG_LAST_IN_BATCH)]
+    # At the last good update (6 ms), not where the gap was noticed (10 ms): the book is unknown from then
+    assert gap == [(T0 + 6 * MS, T0 + 6 * MS, 105, 110, 1, KIND_GAP, 0, 0, 0, FLAG_LAST_IN_BATCH)]
     after = book[book.index(gap[0]) + 1:]
     assert [r[5] for r in after] == [KIND_SNAP_BEGIN, KIND_SNAP_LEVEL, KIND_SNAP_LEVEL, KIND_SNAP_END,
                                     KIND_DELTA, KIND_DELTA]
@@ -89,6 +90,50 @@ def test_gap_starts_a_new_segment_that_resyncs_from_the_next_snapshot(raw, tmp_p
     m = meta(out)
     assert m["stats"]["gaps"] == 1
     assert m["segments"][1]["missed_updates"] == 4
+
+
+def test_a_silence_ends_the_segment_and_a_continuing_stream_resumes_it(raw, tmp_path):
+    write_golden_stream(raw, T0)                                                     # last update 105 at 6 ms
+    raw.trade(T0 + 20 * SEC, 501, "100.03", "0.1", buyer_is_maker=True)              # 20 s later: silent
+    raw.depth(T0 + 21 * SEC, 106, 106, bids=levels(("100.01", "0.5")))               # nothing was lost
+    out = run(raw, tmp_path)
+    book = rows(raw.root, out, "book.parquet")
+    i = next(i for i, r in enumerate(book) if r[5] == KIND_GAP)
+    assert book[i] == (T0 + 6 * MS, T0 + 6 * MS, 105, 106, 1, KIND_GAP, 0, 0, 0, FLAG_LAST_IN_BATCH)
+    after = book[i + 1:]
+    synth = FLAG_FROM_SNAPSHOT | FLAG_SYNTHETIC_SNAPSHOT
+    # The kept book is re-emitted where the stream resumes, then the update applies on top
+    assert after[0] == (T0 + 21 * SEC, 0, 105, 105, 1, KIND_SNAP_BEGIN, 0, 0, 0, synth)
+    assert after[-2][5] == KIND_SNAP_END and after[-1][2:6] == (106, 106, 1, KIND_DELTA)
+    assert [r[4] for r in rows(raw.root, out, "trade.parquet")] == [0, 1]
+    m = meta(out)
+    assert m["stats"]["gaps"] == 1
+    assert m["segments"][1] == {"seg": 1, "gap_ts": T0 + 6 * MS, "synced_from_ts": T0 + 21 * SEC,
+                                "missed_updates": 0, "first_ts": T0 + 21 * SEC, "last_ts": T0 + 21 * SEC}
+
+
+def test_an_outage_across_midnight_ends_the_old_day_and_the_new_day_has_no_stale_snapshot(raw, tmp_path):
+    t0 = DAY2 - 600 * SEC  # 23:50 on day 1
+    raw.exchange_info(t0 - SEC)
+    raw.snapshot(t0, 100, levels(("100.00", "1")), levels(("100.01", "1")))
+    raw.depth(t0 + MS, 101, 101, bids=levels(("100.00", "2")))
+    # The PC sleeps; on waking the recorder reconnects, takes a snapshot and the stream goes on
+    raw.event(DAY2 + 3600 * SEC, "connecting", conn=2)
+    raw.trade(DAY2 + 3600 * SEC + MS, 900, "100.50", "0.1", buyer_is_maker=False, conn=2)
+    raw.snapshot(DAY2 + 3601 * SEC, 200, levels(("100.40", "1")), levels(("100.60", "1")))
+    raw.depth(DAY2 + 3602 * SEC, 201, 201, asks=levels(("100.60", "3")), conn=2)
+    out = run(raw, tmp_path)
+
+    book1 = rows(raw.root, out, "book.parquet", "2026-01-01")
+    assert book1[-1][:6] == (t0 + MS, t0 + MS, 101, 102, 1, KIND_GAP)
+    assert meta(out, "2026-01-01")["segments"][-1] == {"seg": 1, "gap_ts": t0 + MS}
+    book2 = rows(raw.root, out, "book.parquet", "2026-01-02")
+    # No day-start snapshot of the stale book: the day starts at the resync
+    assert book2[0][:6] == (DAY2 + 3601 * SEC, 0, 200, 200, 1, KIND_SNAP_BEGIN)
+    assert not book2[0][9] & FLAG_SYNTHETIC_SNAPSHOT
+    assert book2[-1][2:6] == (201, 201, 1, KIND_DELTA)
+    seg = meta(out, "2026-01-02")["segments"]
+    assert seg[0]["synced_from_ts"] == DAY2 + 3601 * SEC and seg[0]["missed_updates"] == 99
 
 
 def test_a_snapshot_older_than_the_buffer_is_skipped(raw, tmp_path):
@@ -149,7 +194,7 @@ def test_each_day_starts_with_a_synthetic_snapshot_and_its_own_tick_size(raw, tm
     raw.snapshot(t0 + 2 * MS, 100, levels(("100.10", "2"), ("100.00", "1")), levels(("100.20", "1")))
     raw.exchange_info(DAY2 - 60 * SEC, tick="0.1")  # tick size changes from day 2
     raw.depth(DAY2 + 5 * SEC, 102, 102, asks=levels(("100.30", "4")))
-    out = run(raw, tmp_path)
+    out = run(raw, tmp_path, stale_after_s=3600)  # sparse fixture: not a silence
 
     day1, day2 = meta(out, "2026-01-01"), meta(out, "2026-01-02")
     assert day1["spec"]["tick_size"] == 1_000_000 and day2["spec"]["tick_size"] == 10_000_000
@@ -171,7 +216,7 @@ def test_only_requested_dates_are_written_but_state_carries_over(raw, tmp_path):
     raw.exchange_info(t0 - SEC)
     raw.snapshot(t0, 100, levels(("100.00", "1")), levels(("100.01", "1")))
     raw.depth(DAY2 + SEC, 101, 101, bids=levels(("100.00", "2")))
-    out = run(raw, tmp_path, dates=["2026-01-02"])
+    out = run(raw, tmp_path, dates=["2026-01-02"], stale_after_s=3600)
     assert not partition_dir(out, SYMBOL, "2026-01-01").exists()
     book2 = rows(raw.root, out, "book.parquet", "2026-01-02")
     assert book2[0][5] == KIND_SNAP_BEGIN and book2[0][9] & FLAG_SYNTHETIC_SNAPSHOT

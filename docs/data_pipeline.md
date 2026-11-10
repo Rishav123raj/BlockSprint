@@ -93,6 +93,7 @@ uv run python -m research.data.normalize --symbols BTCUSDT --from 2026-11-04 --t
 | `--raw` | `data/raw` | raw archive |
 | `--out` | `data/normalized` | output root |
 | `--lookback-hours` | 2 | raw data read before the first date, so the book is synced at midnight |
+| `--stale-after-s` | 10 | no book update for longer than this is a gap (see Silence below) |
 
 Output per symbol and UTC date: `book.parquet` (snapshots, depth changes and gap markers), `trade.parquet`, `snapshot.parquet` (every REST snapshot, for QC) and `meta.json` (spec in force, row counts, segments, gaps, duplicates, clamped timestamps, source files, SHA-256 of each output). Re-running a date overwrites it. A date still being recorded is written from the open `.part` file and marked `"day_complete": false`.
 
@@ -103,6 +104,8 @@ Speed on the development laptop: a full BTCUSDT day (~40 M book rows) takes a fe
 - **Book sync (Binance's rules):** depth events are buffered until a REST snapshot arrives. Events with `u <= lastUpdateId` are dropped, and the first one kept must satisfy `U <= lastUpdateId + 1`. After that, each event must continue the previous one (`U <= prev_u + 1 <= u`).
 - **Duplicates:** events with `u <= prev_u` are dropped. These come from two connections overlapping during the 24 h rollover. Duplicate trade IDs are dropped too.
 - **Gaps:** an event that skips updates gets a `GAP` row and starts a new **segment**. The book then waits for the next snapshot, at most 10 minutes later.
+- **Silence:** when anything is received more than 10 s after the last book update (a disconnect, the PC asleep, a network stall), the book stopped being live at that update, and a `GAP` row is written. If the depth stream then continues the sequence (nothing lost), the kept book is re-emitted as a snapshot (`SYNTHETIC_SNAPSHOT`) where it resumes; otherwise the next REST snapshot resyncs.
+- **A `GAP` row's time is the last good book update's**, not the time the gap was noticed: from then on the book is unknown. So a replay never shows a stale book as live, and a day that starts inside an outage has no day-start snapshot (it starts at the resync).
 - **Units:** prices are in **ticks** and quantities in **lots**, using the spec in force at the start of each date.
 - **Self-contained days:** each date's book starts with a snapshot of the running book at midnight (`SYNTHETIC_SNAPSHOT`), so one day can be replayed on its own.
 - **`ts_local` never decreases.** A row received earlier than the previous one takes the previous row's time and is flagged `TS_CLAMPED`. That covers the system clock stepping back, and depth events buffered until their sync snapshot arrived.
@@ -289,6 +292,7 @@ uv run pytest tests/python/data/test_downloader.py -v         # checksums, CSV c
 The fixtures (`tests/python/data/conftest.py`) write small raw archives through the recorder's own `RawWriter`. They cover:
 - a normal stream with buffered events and a straddling first event;
 - an injected sequence gap and its resync;
+- a silence that resumes with nothing lost, and an outage across midnight (no stale day-start snapshot);
 - a snapshot too old to sync;
 - a reconnect overlap with duplicate depth and trades;
 - a clock stepping back, and an off-grid price;
@@ -325,6 +329,10 @@ First full run over everything recorded so far (Nov 2–6, BTCUSDT and ETHUSDT),
 | Pack | Nov 5 (`--allow-partial`): BTCUSDT 21.6 M records / 866 MB, ETHUSDT 16.4 M / 658 MB, in 17 s. `catalog verify` OK. The `.bse` records split back into book and trade streams identical to the Parquet files, every field |
 
 The plan's acceptance ("≥ 3 full clean days, QC green") needs days the recorder covers completely. Keep the PC plugged in, or move the recorder to a VPS.
+
+### Gap placement fix (2026-11-10)
+
+An end-to-end run over Nov 2–9 (P3.14's `bs_sim run` over a packed Nov 5–7) showed that a `GAP` row sat where the gap was *noticed*, at the reconnect. Until then a replay showed the last book as live: on Nov 5 at 12:00 the simulator still had the 08:08 BBO, and Nov 9 began with a day-start snapshot of the Nov 7 19:30 book. A strategy could have traded against it. The normalizer now places `GAP` rows at the last good update and treats a silence as a gap (above). All dates were re-normalized and re-packed.
 
 ## Troubleshooting
 

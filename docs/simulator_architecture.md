@@ -254,7 +254,7 @@ A batch is applied atomically, so no strategy ever sees a book in the middle of 
 
 ### 6.3 Segments and gaps
 
-A `GAP` record means updates were lost. The book is flushed: synthetic orders are cancelled, while strategy orders stay resting. The strategy gets `on_gap`, and nothing is matched against the book until the next snapshot re-establishes it. Trades during the gap are still replayed into the tape, but they don't consume synthetic liquidity (there is none).
+A `GAP` record means updates were lost, or the feed went silent (normalizer, data_pipeline.md). It sits at the last good update, so the book is never shown as live through an outage. The book is flushed: synthetic orders are cancelled, while strategy orders stay resting. The strategy gets `on_gap`, and nothing is matched against the book until the next snapshot re-establishes it. Trades during the gap are still replayed into the tape, but they don't consume synthetic liquidity (there is none).
 
 Day-start synthetic snapshots (`FLAG_SYNTHETIC_SNAPSHOT`) and resync snapshots are **reconciled** against the current synthetic book rather than replacing it, so strategy queue positions survive a day boundary (§8.5).
 

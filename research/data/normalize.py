@@ -8,6 +8,13 @@ It reads a symbol's raw files in order and keeps a local order book in sync with
 * Once synced, an event continues the book if ``U <= prev_u + 1 <= u``. Events with ``u <= prev_u`` are
   duplicates (e.g. two connections overlapping during a 24 h rollover) and are dropped. Anything else is a
   gap: a GAP row is written, a new segment starts, and the book waits for the next snapshot.
+* Silence: when anything is received more than ``stale_after_s`` (default 10 s) after the last book update,
+  the book stopped being live at that update (a disconnect, the PC asleep, a network stall). The GAP row is
+  written then, before a date rollover could copy the stale book into the next day-start snapshot. The book
+  is kept: if the next depth event continues the sequence (nothing was lost), it is re-emitted as a
+  snapshot at that event's time and the new segment starts there; otherwise the next REST snapshot resyncs.
+* A GAP row's time is the last good book update's (the book is unknown from then on), not the time the
+  gap was noticed.
 
 Every price and quantity is converted to ticks and lots of the spec in force on that date (from the
 recorded exchangeInfo). Each date's book file starts with a snapshot of the running book at midnight
@@ -276,7 +283,7 @@ class Normalizer:
 
     def __init__(self, symbol: str, out_root: Path | str, timeline: SpecTimeline,
                  dates: Iterable[str] | None = None, chunk_rows: int = 500_000,
-                 buffer_limit: int = 100_000, batch_rows: int = 200_000) -> None:
+                 buffer_limit: int = 100_000, batch_rows: int = 200_000, stale_after_s: float = 10.0) -> None:
         self.symbol = symbol
         self.out_root = Path(out_root)
         self.timeline = timeline
@@ -284,6 +291,7 @@ class Normalizer:
         self.chunk_rows = chunk_rows
         self.buffer_limit = buffer_limit
         self.batch_rows = batch_rows
+        self.stale_ns = int(stale_after_s * 1e9)
 
         # Book state, fixed-point 1e-8 units (independent of the date's spec). A removed level stays as a
         # 0 entry until the next snapshot of the book prunes it: dict.update can then apply whole batches.
@@ -295,6 +303,8 @@ class Normalizer:
         self.buffer: list[tuple[int, dict]] = []
         self.just_synced = False  # the next event is the first after a sync (it may start before L + 1)
         self.last_book_ts: int | None = None
+        self.last_book_exch = 0
+        self.suspended = False    # the book went silent: kept, not live, until continued or resynced
         self.last_trade_id: int | None = None
 
         # Queued depth rows: level strings plus one tuple per event (ts, ts_exch, u, U, flags, rows)
@@ -336,6 +346,8 @@ class Normalizer:
         t = env["t"]
         if t > self.input_end_ts:
             self.input_end_ts = t
+        if self.synced and self.last_book_ts is not None and t - self.last_book_ts > self.stale_ns:
+            self._silence()
         if kind == "ws":
             stream = env["s"]
             data = orjson.loads(env["d"])["data"]
@@ -508,13 +520,18 @@ class Normalizer:
                 self.out.stats.sync_attempts_failed += 1
             return
         self._flush()
+        out = self.out
+        if self.suspended:
+            self.suspended = False
+            if out is not None and self.prev_u is not None:
+                self._segment(out).setdefault("missed_updates", max(0, last_id - self.prev_u))
         self.bids, self.asks = dict(bids), dict(asks)
         self.synced = True
         self.just_synced = True
         self.prev_u = last_id
         self.buffer = []
         self.last_book_ts = ts
-        out = self.out
+        self.last_book_exch = 0
         if out is not None:
             out.stats.off_grid_rows += self._emit_book_snapshot(out.book, ts, last_id, FLAG_FROM_SNAPSHOT | clamp,
                                                                 self.bids, self.asks)
@@ -526,6 +543,17 @@ class Normalizer:
         if self.synced:
             self._apply(t, data)
             return
+        if self.suspended:
+            if data["u"] <= self.prev_u or data["U"] <= self.prev_u + 1:
+                if data["u"] > self.prev_u:
+                    self._resume(t)
+                self._apply(t, data)  # a duplicate is counted and dropped there
+                return
+            # Updates were lost while silent: the GAP row is already written
+            self.suspended = False
+            if self.out is not None:
+                self._segment(self.out)["missed_updates"] = data["U"] - self.prev_u - 1
+            self.bids, self.asks = {}, {}
         self.buffer.append((t, data))
         if len(self.buffer) > self.buffer_limit:
             del self.buffer[: len(self.buffer) - self.buffer_limit]
@@ -560,6 +588,7 @@ class Normalizer:
             self.q_events.append((ts, data["E"] * 1_000_000, last, first,
                                   clamp | (FLAG_DUPLICATE_SUSPECT if overlap else 0), n))
         self.prev_u = last
+        self.last_book_exch = data["E"] * 1_000_000
         if out is not None:
             st = out.stats
             st.depth_events += 1
@@ -575,21 +604,47 @@ class Normalizer:
             self._flush_depth()
 
     def _gap(self, t: int, data: dict) -> None:
-        ts, clamp = self._stamp(t)
-        out = self._route(ts)  # a date rollover first: its day-start snapshot belongs to the old segment
-        self._flush()          # queued rows belong to the old segment too
-        self.seg += 1
-        if out is not None:
-            out.stats.gaps += 1
-            out.book.add_one(ts, data["E"] * 1_000_000, self.prev_u, data["U"], self.seg, KIND_GAP, 0, 0, 0,
-                             FLAG_LAST_IN_BATCH | clamp)
-            seg = self._segment(out)
-            seg["gap_ts"] = ts
-            seg["missed_updates"] = data["U"] - self.prev_u - 1
+        self._emit_gap(data["U"], data["U"] - self.prev_u - 1)
         self.synced = False
         self.bids, self.asks = {}, {}
         self.buffer = [(t, data)]
+
+    def _silence(self) -> None:
+        self._emit_gap(self.prev_u + 1, None)
+        self.synced = False
+        self.suspended = True  # the book and prev_u are kept for _resume
+
+    def _emit_gap(self, seq_first: int, missed: int | None) -> None:
+        """GAP row at the last good book update, in that update's date; starts a new segment."""
+        self._flush()  # queued rows belong to the old segment
+        ts = max(self.last_book_ts, self.day_start)  # after a day-start snapshot taken in between
+        self.seg += 1
+        out = self.out
+        if out is not None:
+            out.stats.gaps += 1
+            out.book.add_one(ts, self.last_book_exch, self.prev_u, seq_first, self.seg, KIND_GAP, 0, 0, 0,
+                             FLAG_LAST_IN_BATCH)
+            seg = self._segment(out)
+            seg["gap_ts"] = ts
+            if missed is not None:
+                seg["missed_updates"] = missed
         self.last_book_ts = None
+
+    def _resume(self, t: int) -> None:
+        """The depth stream continues after a silence with nothing lost: the kept book is exact again."""
+        ts, clamp = self._stamp(t)
+        out = self._route(ts)
+        self._flush()
+        self.synced = True
+        self.suspended = False
+        self.just_synced = False
+        self.last_book_ts = ts
+        if out is not None:
+            out.stats.off_grid_rows += self._emit_book_snapshot(
+                out.book, ts, self.prev_u, FLAG_FROM_SNAPSHOT | FLAG_SYNTHETIC_SNAPSHOT | clamp, self.bids, self.asks)
+            seg = self._segment(out)
+            seg.setdefault("synced_from_ts", ts)
+            seg.setdefault("missed_updates", 0)
 
     def _trade(self, t: int, data: dict) -> None:
         tid = data["t"]
@@ -638,10 +693,11 @@ def files_for(raw_root: Path | str, symbol: str, dates: list[str] | None, lookba
 
 
 def normalize_symbol(raw_root: Path | str, out_root: Path | str, symbol: str, dates: list[str] | None = None,
-                     lookback_hours: float = 2.0, chunk_rows: int = 500_000) -> list[dict[str, Any]]:
+                     lookback_hours: float = 2.0, chunk_rows: int = 500_000,
+                     stale_after_s: float = 10.0) -> list[dict[str, Any]]:
     timeline = SpecTimeline.from_archive(raw_root, symbol)
     files = files_for(raw_root, symbol, dates, lookback_hours)
-    return Normalizer(symbol, out_root, timeline, dates, chunk_rows).run(files)
+    return Normalizer(symbol, out_root, timeline, dates, chunk_rows, stale_after_s=stale_after_s).run(files)
 
 
 def _date_range(start: str, end: str) -> list[str]:
@@ -660,6 +716,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--to", dest="date_to", help="last UTC date (with --from)")
     ap.add_argument("--lookback-hours", type=float, default=2.0,
                     help="raw data read before the first date to sync the book (default 2)")
+    ap.add_argument("--stale-after-s", type=float, default=10.0,
+                    help="no book update for longer than this is a gap (default 10)")
     args = ap.parse_args(argv)
 
     dates = args.dates
@@ -670,7 +728,8 @@ def main(argv: list[str] | None = None) -> int:
 
     for symbol in args.symbols:
         t0 = time.perf_counter()
-        metas = normalize_symbol(args.raw, args.out, symbol, dates, args.lookback_hours)
+        metas = normalize_symbol(args.raw, args.out, symbol, dates, args.lookback_hours,
+                                 stale_after_s=args.stale_after_s)
         print(f"{symbol}: {len(metas)} date(s) in {time.perf_counter() - t0:.1f} s")
         for m in metas:
             st = m["stats"]
