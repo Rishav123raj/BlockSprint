@@ -55,6 +55,7 @@
 | 2026-11-10 | P4.6 done | `research/strategies/base.py`: `Strategy` base class with the eight callbacks as documented defaults marked `_bs_default` (the C++ adapter never calls them: zero cost), class attributes `name` (default the class name) and `callback_mode` (Simulator / Results.run use it unless given one; `Simulator(callback_mode=None)` now reads it), `strategy.run(config)` -> Results; a non-callback `on_*` method or a bad mode is a TypeError at class definition. Typed facade: `Context`, `Book`, `BookLevel`, `TradeEvent`, `ExecReport`, `RequestReject`, `Account`, `OpenOrder` as typing Protocols (no run-time cost), tested to list exactly the bound classes' members; mypy clean. 70 Python tests |
 | 2026-11-10 | P4.7 done | `research/strategies/passive_quoter.py`: line-for-line Python port of the C++ `PassiveQuoter` on the `Strategy` base class (same params and validation, `from_params`). `tests/python/test_parity.py`: Python and C++ give **identical** outputs (all five CSV hashes, output hash, gateway stats) on four scenarios: the two pinned determinism scenarios (random latency + prob_power, Tokyo + pro_rata + warm-up + plain LIMIT; equal to the pinned C++ hashes), home-PC defaults, and a 3 ms refresh with requests in flight; identical in every callback mode. A mutation check showed the original scenarios didn't exercise waiting for in-flight requests, hence the 3 ms scenario. Across the real Nov 6 data gap (07:30-14:00) identical too (opt-in: BLOCKSPRINT_SLOW_TESTS=1, ~2 min). 77 Python tests |
 | 2026-11-10 | P4.8 done | CI `Python / Windows` and `Python / Linux`: `uv sync` + the whole suite (editable build), then `uv build --wheel`, installed into a fresh venv, and the whole suite against it (`pytest` executable, `-o pythonpath=`); with `BLOCKSPRINT_EXPECT_INSTALLED=1` a test fails unless `blocksprint_sim` and `research` come from site-packages (it caught `python -m pytest` importing the source tree locally). Wheels uploaded as artifacts. Locally (Windows): wheel 438 kB, 35 s with a warm build-py/, 78 passed against it. Docs: docs/dev_setup.md "A wheel" |
+| 2026-11-10 | Phase 4 accepted | CI run for 31df661: `Python / Windows` and `Python / Linux` green (uv sync on fresh runners, the suite on the editable build and on the built wheel in a clean environment; wheels 446 kB / 669 kB as artifacts). The first P4.8 run failed only because the location check assumed the environment sat outside the checkout; fixed. All Phase 4 acceptance criteria met: tag `v2.0.0-p4` |
 
 ---
 
@@ -436,10 +437,10 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 | P4.8 | CI: build the wheel and run pytest on Windows and Linux | `.github/workflows/ci.yml` | 0.5 |
 
 ### Acceptance criteria
-- [ ] `uv sync` on a clean machine builds and imports `blocksprint_sim`.
+- [x] `uv sync` on a clean machine builds and imports `blocksprint_sim`. (CI `Python / Windows` and `Python / Linux` on fresh runners, plus a built wheel in a clean environment; 2026-11-10)
 - [x] P4.7 parity passes. (2026-11-10)
 - [x] A one-day BTCUSDT run with a Python strategy on a 1 s timer finishes in < 2 min. (31.9 s timer_only, 38.2 s every_event; 2026-11-10)
-- [ ] Tag `v2.0.0-p4`.
+- [x] Tag `v2.0.0-p4`. (2026-11-10)
 
 ### Risks
 - **Windows build friction** (MSVC + Python headers + scikit-build). Mitigation: pin the CMake and scikit-build-core versions, and document the "x64 Native Tools" requirement.
