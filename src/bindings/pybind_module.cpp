@@ -483,14 +483,21 @@ PYBIND11_MODULE(blocksprint_sim, m) {
         "The fully resolved run config (defaults < latency preset < config < overrides), as bs_sim config "
         "prints it. config: a dict, or JSON text. overrides: 'key.path=value' strings.");
 
-    py::class_<RunConfig>(m, "SimConfig", "A resolved run config (as bs_sim run resolves it)")
+    py::class_<RunConfig>(m, "SimConfig",
+                          "A resolved run config (as bs_sim run resolves it); the C++ strategy's name and params "
+                          "are checked too")
         .def(py::init([](const py::object& config, const std::vector<std::string>& overrides) {
-                 return resolve(config, overrides);
+                 RunConfig rc = resolve(config, overrides);
+                 make_strategy(rc.strategy_name, rc.strategy_params);  // its params too, before any run
+                 return rc;
              }),
              py::arg("config"), py::arg("overrides") = std::vector<std::string>{})
         .def_property_readonly("resolved", [](const RunConfig& rc) { return to_python(rc.resolved); })
         .def_readonly("symbol", &RunConfig::symbol)
         .def_readonly("data_file", &RunConfig::bse_path)
+        .def_readonly("data_sha256", &RunConfig::bse_sha256, "The .bse file's SHA-256 from the dataset manifest ('' for a "
+                      "config naming a .bse file directly)")
+        .def_readonly("manifest_path", &RunConfig::manifest_path, "The dataset manifest ('' for a .bse file)")
         .def_readonly("output_dir", &RunConfig::output_dir)
         .def_readonly("strategy_name", &RunConfig::strategy_name)
         .def_property_readonly("strategy_params", [](const RunConfig& rc) { return to_python(rc.strategy_params); })

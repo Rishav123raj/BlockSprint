@@ -104,9 +104,10 @@ def test_params_are_checked_as_in_cpp(tmp_path):
         with pytest.raises(ValueError, match=message):
             PassiveQuoter.from_params(params)
         # the C++ strategy refuses the same params
-        with pytest.raises(ValueError):
-            bs.SimConfig({"dataset": str(FIXTURE), "output": {"dir": str(tmp_path)},
-                          "strategy": {"name": "passive_quoter", "params": params}})
+        base = {"dataset": str(FIXTURE), "latency_preset": "zero", "output": {"dir": str(tmp_path)}}
+        bs.SimConfig({**base, "strategy": {"name": "passive_quoter", "params": {}}})  # the base itself is valid
+        with pytest.raises(ValueError, match="strategy.params"):
+            bs.SimConfig({**base, "strategy": {"name": "passive_quoter", "params": params}})
 
 
 @pytest.mark.skipif(not (PACKED / "BTCUSDT.bse").exists(), reason="needs the recorded Nov 5-7 data (data/packed)")

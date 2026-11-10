@@ -1,0 +1,17 @@
+# A small sweep on the committed one-minute slice (runs anywhere, ~10 s):
+#   python -m research.run research/experiments/configs/quoter_fixture.yaml
+# 3 latencies x 2 queue models x 2 seeds = 12 runs of the C++ PassiveQuoter.
+name: quoter_fixture
+description: PassiveQuoter on BTCUSDT 2026-11-05 02:00-02:01 UTC, latency x queue model
+dataset: tests/sim/data/btcusdt_2026-11-05_0200_1m.bse
+seeds: [1, 2]
+queue_model: {model: cancel_from_back}
+sample_ms: 1000
+strategy:
+  name: passive_quoter
+  params: {size: "0.001", refresh_ms: 100, max_position: "0.005"}
+sweep:
+  mode: grid
+  params:
+    latency_preset: [zero, binance_spot_tokyo_vps, binance_spot_home_pc]
+    queue_model.model: [cancel_from_back, cancel_from_front]
