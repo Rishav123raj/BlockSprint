@@ -87,3 +87,38 @@ tca.rejects(run)            # refusals by reason
   - 4,077 cancels by replace, 0.24 cancels per fill;
   - 13 orders rejected, 3 requests refused.
 - **TWAP buy** of 1 BTC over 50 min (Nov 10 14:00–15:00, 60 market slices): 1.4% of the market's volume; 0.71 bps better than the VWAP, 0.10 bps better than the mid's TWAP; impact +1.23 bps at 5 s.
+
+## Markouts (`markouts.py`, P5.6)
+
+```python
+from research.analytics.markouts import fill_markouts, markout_curve
+fill_markouts(run)                       # each fill: mo_<h>_bps and mo_<h> (quote) per horizon
+markout_curve(run)                       # averages per horizon, by liquidity and side
+markout_curve(run, by=())                # all fills together
+markout_curve(run, np.geomspace(1e6, 6e10, 30).astype(int), by=("liquidity",))   # a dense curve
+```
+
+**Definition:** the markout of a fill at horizon h is s × (m(t + h) − price). That is the fill's profit if the position were closed at the mid h later.
+- **Sign:** positive is good for the strategy, unlike `tca.py`, where positive is a cost.
+- **Units:** in bps it is divided by the mid at the fill, m(t). Fees are not included.
+- **Horizons:** 0, 100 ms, 1 s, 5 s, 30 s and 60 s by default.
+- **Consistency with the other modules:**
+  - at h = 0 the markout is the fill's spread capture (P5.4);
+  - the change after that, s × (m(t + h) − m(t)), is half of TCA's price impact.
+  
+  A test checks both.
+- **Past the end of the data:** a horizon that falls beyond the run's data has no mid. That markout is null and left out of the averages (`fills` counts the fills used).
+
+**The curve's columns:** per strategy, group and horizon: `fills`, `qty`, `mean_bps` (weighted by quantity), `median_bps`, `se_bps` (the standard error of the unweighted mean) and `pnl` (the sum in quote).
+
+**On real data:**
+
+| Horizon | 0 | 100 ms | 1 s | 5 s | 30 s | 60 s |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Passive quoter, 17,093 maker fills (`configs/sim/example_btc.json`), bps | −0.11 | −0.33 | −0.58 | −0.90 | −1.01 | −1.13 |
+| TWAP buy, 85 taker fills (Nov 10 14:00–15:00), bps | −0.03 | −0.05 | +0.14 | +0.59 | +0.81 | +0.61 |
+
+- **Quoter:** the curve falls steadily, which is adverse selection. The standard errors are 0.001–0.04 bps, and the buy and sell sides look alike. Its 60 s markout loses 34.83 USDT, about the inventory loss in the P5.4 split.
+- **TWAP:** a taker pays a little at once. After that the market rose that afternoon, so its later markouts are positive, but with only 85 fills the standard errors (0.3–0.9 bps) are as large as the means.
+
+The markouts for the 6-hour run take 0.9 s.

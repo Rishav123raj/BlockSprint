@@ -73,10 +73,12 @@ class MarketData:
     """The data's BBO over time and its trades. Prices and quantities as floats in quote / base units, NaN for
     no level."""
 
-    def __init__(self, bbo: np.ndarray, trades: np.ndarray | None = None):
+    def __init__(self, bbo: np.ndarray, trades: np.ndarray | None = None, end_ns: int | None = None):
         """bbo: a blocksprint_sim.data_bbo array (ts_ns, bid, bid_qty, ask, ask_qty in 1e-8 units); trades: a
-        blocksprint_sim.data_trades array (ts_ns, px, qty, side), or None to read them when first needed."""
+        blocksprint_sim.data_trades array (ts_ns, px, qty, side), or None to read them when first needed;
+        end_ns: where the data stops (later times have no mid for markouts), None: no limit."""
         self.bbo = bbo
+        self.end_ns = end_ns
         self._trades_raw = trades
         self._source: tuple[str, int, int] | None = None
         self.ts = bbo["ts_ns"].astype(np.int64)
@@ -94,7 +96,8 @@ class MarketData:
         then) has moved. Timelines are cached, so the analytics of one run share one replay."""
         start, _, end = run_window(run)
         source = (str(path or run.meta["data"]["file"]), start, end + after_ns)
-        md = cls(_timeline(*source))
+        last = run.meta.get("data_header", {}).get("last_ts_local")
+        md = cls(_timeline(*source), end_ns=min(source[2], int(last)) if last is not None else source[2])
         md._source = source
         return md
 
