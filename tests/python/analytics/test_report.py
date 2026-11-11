@@ -113,3 +113,9 @@ def test_formatting_and_scales():
     assert "<b>" not in chart and "&lt;b&gt;" in chart
     grid = report.heatmap("x", ["a", "b"], "y", ["c"], np.array([[1.0, np.nan]]), title="t")
     assert grid.count('class="mark"') == 2
+    # Signed values all below zero: one red hue over their range (the closest to 0 lightest), not a scale
+    # centred on 0 that would paint close values alike
+    losses = report.heatmap("x", ["a", "b"], "y", ["c"], np.array([[-84.0, -83.0]]), title="t", diverging=True)
+    assert report._RED[2] in losses and report._RED[0] in losses and report._MID not in losses
+    mixed = report.heatmap("x", ["a", "b"], "y", ["c"], np.array([[-1.0, 2.0]]), title="t", diverging=True)
+    assert report._MID in mixed

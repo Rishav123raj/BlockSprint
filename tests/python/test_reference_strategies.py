@@ -143,6 +143,16 @@ def test_avellaneda_stoikov_on_the_slice(tmp_path):
     assert again.output_hash == res.output_hash  # deterministic
 
 
+def test_avellaneda_stoikov_can_join_the_best(tmp_path):
+    """With a one-tick spread and a tight model spread the quotes sit at the best bid and ask (min_spread_ticks 1
+    is the distance between the two quotes, not from each to the mid)"""
+    from research.analytics import queue
+
+    res = run(tmp_path, AvellanedaStoikov(gamma=0.0005, k=1000, refresh_ms=250))
+    p = queue.placements(res)
+    assert (p["ticks_from_best"] == 0).mean() > 0.2 and (p["ticks_from_best"] >= 0).all()
+
+
 def test_imbalance_taker_round_trips(tmp_path):
     st = ImbalanceTaker(threshold=0.5, hold_ms=500, cooldown_ms=500)
     res = run(tmp_path, st)

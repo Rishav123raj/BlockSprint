@@ -52,6 +52,33 @@ results: results                      # the store's root
 - **Everything is checked when the file is loaded.** Every run of the plan goes through the C++ config resolver, including the C++ strategy's parameters, and a Python strategy is built once with its parameters. An error names the point, its values and the key, before anything runs (exit code 2).
 - **Paths** (`dataset`, `results`) are relative to the working directory, as for `bs_sim`.
 
+## Suites and labels
+
+**Suites:** a file can hold several experiments that share settings. It has `defaults`, which are merged into each entry of `experiments` key by key, and an optional `description`. `python -m research.run` runs each experiment in turn, with its own summary and report; `--dry-run` lists all of them. Names must differ. An error names the entry, e.g. `experiments[1] (twap): ...`. From Python, use `Experiment.load_all(path)` for a suite; `Experiment.load` refuses one.
+
+```yaml
+defaults:
+  dataset: data/packed/binance_spot_btc_eth_1110
+  sweep: {params: {latency_preset: [zero, binance_spot_tokyo_vps]}}
+experiments:
+  - {name: quoter, strategy: {name: passive_quoter}}
+  - {name: mm, strategy: {python: research.strategies.avellaneda_stoikov:AvellanedaStoikov}}
+```
+
+**Labels:** `sweep.labels` names a key's values, one label per value in the same order. It is for values that are objects, such as whole latency models:
+
+```yaml
+sweep:
+  params:
+    latency: [{feed: {model: constant, us: 0}, ...}, {feed: {model: constant, us: 5000}, ...}]
+  labels:
+    latency: ["0 ms", "5 ms"]
+```
+
+Labels appear in the progress lines, the summary (`labels` per run, `label.*` columns in `ExperimentResult.to_polars()`) and the reports. They don't change a run's identity.
+
+`research/experiments/configs/sensitivity.yaml` (P5.12) is a suite: latency × queue model for each reference strategy ([strategies.md](strategies.md)).
+
 ## The store
 
 ```text

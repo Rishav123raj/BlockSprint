@@ -391,10 +391,24 @@ def _cell_color(v: float, lo: float, hi: float, diverging: bool) -> str:
     return _mix(_BLUE[i], _BLUE[i + 1], pos - i)
 
 
+# A one-hue red ramp (light to dark) from the diverging pair's negative pole, for values that are all losses
+_RED = [_mix("#ffffff", _NEG, 0.22), _NEG, _mix(_NEG, "#000000", 0.45)]
+
+
+def _red_color(v: float, lo: float, hi: float) -> str:
+    """Values <= 0: the further below zero (towards lo), the darker."""
+    if not math.isfinite(v):
+        return "transparent"
+    t = 0.0 if hi == lo else (hi - v) / (hi - lo)
+    return _mix(_RED[0], _RED[1], t * 2) if t <= 0.5 else _mix(_RED[1], _RED[2], t * 2 - 1)
+
+
 def heatmap(x_name: str, x_labels: Sequence[str], y_name: str, y_labels: Sequence[str], grid: np.ndarray, *,
             title: str, digits: int = 2, diverging: bool = False) -> str:
-    """A grid of cells (rows: y values, columns: x values): blue for magnitude, or blue / gray / red around 0;
-    each cell's value on hover and in the table."""
+    """A grid of cells (rows: y values, columns: x values), each cell's value on hover and in the table.
+    Magnitudes: the blue ramp over the cells' range. Signed values (diverging): red / gray / blue around 0 when
+    they straddle it; when they all share a sign, one hue over their range (blue for gains, red for losses,
+    darker further from 0), so that close values still differ."""
     nx, ny = len(x_labels), len(y_labels)
     lw = 140
     cw = max(48.0, min(170.0, (W - lw - 16) / max(nx, 1)))
@@ -408,6 +422,12 @@ def heatmap(x_name: str, x_labels: Sequence[str], y_name: str, y_labels: Sequenc
     height = 20 + ch * ny + 34
     vals = grid[np.isfinite(grid)]
     lo, hi = (float(vals.min()), float(vals.max())) if len(vals) else (0.0, 1.0)
+    mode = ("diverging" if lo < 0 < hi else "red" if hi <= 0 and lo < 0 else "blue") if diverging else "blue"
+
+    def color(v: float) -> str:
+        if mode == "red":
+            return _red_color(v, lo, hi)
+        return _cell_color(v, lo, hi, mode == "diverging")
     parts = [f'<svg viewBox="0 0 {width:.0f} {height:.0f}" role="img" aria-label="{_e(title)}" '
              f'style="max-width:{width:.0f}px">']
     for j, yl in enumerate(y_labels):
@@ -416,7 +436,7 @@ def heatmap(x_name: str, x_labels: Sequence[str], y_name: str, y_labels: Sequenc
             v = grid[j, i]
             x, y = lw + cw * i, 20 + ch * j
             parts.append(f'<rect class="mark" tabindex="0" x="{x + 1:.1f}" y="{y + 1:.1f}" width="{cw - 2:.1f}" '
-                         f'height="{ch - 2:.1f}" rx="4" fill="{_cell_color(v, lo, hi, diverging)}" '
+                         f'height="{ch - 2:.1f}" rx="4" fill="{color(v)}" '
                          f'stroke="var(--ring)" data-h="{_e(f"{y_name} {yl}, {x_name} {xl}")}" '
                          f'data-v="{_e(fmt(v, digits))}"/>')
     for i, xl in enumerate(x_labels):
@@ -425,7 +445,10 @@ def heatmap(x_name: str, x_labels: Sequence[str], y_name: str, y_labels: Sequenc
     parts.append(f'<text x="{lw + cw * nx / 2:.1f}" y="{20 + ch * ny + 30:.1f}" text-anchor="middle">'
                  f'{_e(x_name)}</text>')
     parts.append(f'<text x="{lw - 8}" y="12" text-anchor="end">{_e(y_name)}</text></svg>')
-    if diverging:
+    if mode == "red":
+        scale = (f'<div class="scale"><span>{_e(fmt(hi, digits))}</span><i style="background:linear-gradient(90deg,'
+                 f'{_RED[0]},{_RED[1]},{_RED[2]})"></i><span>{_e(fmt(lo, digits))}</span></div>')
+    elif mode == "diverging":
         m = max(abs(lo), abs(hi))
         scale = (f'<div class="scale"><span>{_e(fmt(-m, digits))}</span><i style="background:linear-gradient(90deg,'
                  f'{_NEG},{_MID},{_POS})"></i><span>{_e(fmt(m, digits, signed=True))}</span></div>')
@@ -678,6 +701,12 @@ METRICS = [  # (key, title, digits, diverging)
 ]
 
 
+def _lab(rec: Any, key: str) -> str:
+    """A swept value's name: the sweep's label for it, else the value, shortened."""
+    labels = getattr(rec, "labels", None) or {}
+    return labels.get(key) or _short(rec.params.get(key))
+
+
 def comparison(result: Any, experiment: Any, rows: Sequence[dict[str, Any]], run_links: dict[str, str]) -> str:
     """The comparison page: rows are {"record": RunRecord, "metrics": metrics(...) or None}."""
     swept = list(experiment.sweep.params) if experiment.sweep else []
@@ -696,14 +725,14 @@ def comparison(result: Any, experiment: Any, rows: Sequence[dict[str, Any]], run
         pairs = list(itertools.combinations(swept, 2))[:3] if len(swept) >= 2 else [(swept[0], None)]
         for xk, yk in pairs:
             # Every point, failed ones too (an empty cell)
-            xs = list(dict.fromkeys(_short(r["record"].params[xk]) for r in rows))
-            ys = list(dict.fromkeys(_short(r["record"].params[yk]) for r in rows)) if yk else ["all"]
+            xs = list(dict.fromkeys(_lab(r["record"], xk) for r in rows))
+            ys = list(dict.fromkeys(_lab(r["record"], yk) for r in rows)) if yk else ["all"]
             for key, title, digits, div in METRICS:
                 grid = np.full((len(ys), len(xs)), np.nan)
                 for j, yv in enumerate(ys):
                     for i, xv in enumerate(xs):
-                        vals = [float(r["metrics"][key]) for r in ok if _short(r["record"].params[xk]) == xv
-                                and (yk is None or _short(r["record"].params[yk]) == yv)
+                        vals = [float(r["metrics"][key]) for r in ok if _lab(r["record"], xk) == xv
+                                and (yk is None or _lab(r["record"], yk) == yv)
                                 and r["metrics"][key] is not None and math.isfinite(float(r["metrics"][key]))]
                         if vals:
                             grid[j, i] = float(np.mean(vals))
@@ -719,7 +748,7 @@ def comparison(result: Any, experiment: Any, rows: Sequence[dict[str, Any]], run
         rec, m = r["record"], r["metrics"]
         link = run_links.get(rec.run_id)
         cell = f'<a href="{_e(link)}">{_e(rec.run_id)}</a>' if link else _e(rec.run_id)
-        vals = [_short(rec.params.get(k)) for k in swept] + [str(rec.seed)]
+        vals = [_lab(rec, k) for k in swept] + [str(rec.seed)]
         if m:
             vals += [fmt(m["pnl"], 2, True), fmt(m["spread_capture"], 2, True), fmt(m["inventory"], 2, True),
                      fmt(m["fees"], 2), fmt(m["fills"]), fmt(m["fill_ratio"], 3), fmt(m["markout_5s_bps"], 3, True),

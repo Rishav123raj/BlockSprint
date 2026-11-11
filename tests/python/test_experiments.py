@@ -228,3 +228,75 @@ def test_command_line(tmp_path, capsys):
     bad = write_yaml(tmp_path, {**PINNED, "queue_model": {"model": "nope"}})
     assert run_main([str(bad)]) == 2
     assert "queue_model" in capsys.readouterr().err
+
+
+# ---- suites and labels (P5.12) ----
+
+LATENCY_5MS = {leg: {"model": "constant", "us": 5000} for leg in ("feed", "entry", "ack")}
+LATENCY_0 = {leg: {"model": "constant", "us": 0} for leg in ("feed", "entry", "ack")}
+
+
+def suite_doc(tmp_path):
+    return {
+        "description": "two strategies",
+        "defaults": {"dataset": str(FIXTURE), "results": str(tmp_path / "results"), "seeds": [3],
+                     "strategy": {"name": "passive_quoter"},
+                     "sweep": {"params": {"latency": [LATENCY_0, LATENCY_5MS]}, "labels": {"latency": ["0 ms", "5 ms"]}}},
+        "experiments": [{"name": "quoter"},
+                        {"name": "twap", "strategy": {"name": "twap_taker",
+                                                      "params": {"side": "sell", "quantity": "0.01", "slices": 2,
+                                                                 "duration_ms": 20000}}}],
+    }
+
+
+def test_a_suite_loads_with_defaults_and_labels(tmp_path):
+    exps = Experiment.load_all(write_yaml(tmp_path, suite_doc(tmp_path)))
+    assert [e.name for e in exps] == ["quoter", "twap"]
+    assert exps[0].strategy.name == "passive_quoter" and exps[1].strategy.name == "twap_taker"
+    assert all(e.seeds == [3] and len(e.plan()) == 2 for e in exps)
+    assert exps[0].label("latency", LATENCY_5MS) == "5 ms" and exps[0].label("seed", 3) == "3"
+    with pytest.raises(ValueError, match="load_all"):
+        Experiment.load(write_yaml(tmp_path, suite_doc(tmp_path)))
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda d: d["experiments"].append({"name": "quoter"}), "names must differ"),
+    (lambda d: d.update(extra=1), "not extra"),
+    (lambda d: d.update(experiments=[]), "non-empty"),
+    (lambda d: d["defaults"]["sweep"]["labels"].update(latency=["0 ms"]), "one distinct label per value"),
+    (lambda d: d["defaults"]["sweep"]["labels"].update(latency=["x", "x"]), "one distinct label per value"),
+    (lambda d: d["defaults"]["sweep"]["labels"].update(seed=["a"]), "label a key of sweep.params"),
+    (lambda d: d["experiments"][1]["strategy"]["params"].update(slices=0), r"experiments\[1\] \(twap\)"),
+])
+def test_suite_errors(tmp_path, change, message):
+    doc = suite_doc(tmp_path)
+    change(doc)
+    with pytest.raises(ValueError, match=message):
+        Experiment.load_all(write_yaml(tmp_path, doc))
+
+
+def test_a_suite_runs_from_the_command_line_with_labels(tmp_path, capsys):
+    path = write_yaml(tmp_path, suite_doc(tmp_path))
+    assert run_main([str(path), "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "latency=5 ms seed=3" in out and "quoter: 2 runs" in out and "twap: 2 runs" in out
+    assert run_main([str(path), "--workers", "1"]) == 0
+    root = tmp_path / "results" / "experiments"
+    for name in ("quoter", "twap"):
+        summary = json.loads((root / name / "summary.json").read_text())
+        assert [r["labels"] for r in summary["runs"]] == [{"latency": "0 ms"}, {"latency": "5 ms"}]
+        page = (root / name / "report.html").read_text(encoding="utf-8")
+        assert ">5 ms<" in page and "&quot;us&quot;" not in page  # the label, not the latency object
+
+
+def test_the_shipped_sensitivity_suite_is_valid(tmp_path):
+    """configs/sensitivity.yaml reads the packed Nov 10 data, which isn't in git: check it on the slice"""
+    doc = yaml.safe_load((ROOT / "research" / "experiments" / "configs" / "sensitivity.yaml").read_text())
+    doc["defaults"].update(dataset=str(FIXTURE), results=str(tmp_path / "results"))
+    doc["defaults"].pop("window")
+    exps = Experiment.load_all(write_yaml(tmp_path, doc))
+    assert [e.name for e in exps] == ["sensitivity_mm", "sensitivity_twap", "sensitivity_imbalance"]
+    assert all(len(e.plan()) == 16 for e in exps)
+    labels = {(e.label("latency", s.params["latency"]), e.label("queue_model", s.params["queue_model"]))
+              for e in exps[:1] for s in e.plan()}
+    assert len(labels) == 16 and ("50 ms", "power 2") in labels

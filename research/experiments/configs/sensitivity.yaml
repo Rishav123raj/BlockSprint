@@ -1,0 +1,50 @@
+# The standard sensitivity study (P5.12): how much each reference strategy's results depend on the two
+# assumptions the data can't settle, latency and the queue model.
+#   python -m research.run research/experiments/configs/sensitivity.yaml
+# A suite: the defaults below, then one experiment per strategy (16 runs each, 48 in all), each with its own
+# comparison report (results/experiments/sensitivity_*/report.html). Needs the packed Nov 10 dataset
+# (docs/data_pipeline.md).
+#
+# Latency: every leg (data to the strategy, order to the exchange, report back) a constant 0, 5, 20 or 50 ms.
+# Queue model, from the most to the least favourable to a resting order: cancellations come from the front of
+# the queue (ahead of it), pro rata, with a probability power 2, or from the back (only trades move it up).
+description: Latency x queue model for the reference strategies, BTCUSDT 2026-11-10 02:00-03:00 UTC
+defaults:
+  dataset: data/packed/binance_spot_btc_eth_1110
+  symbol: BTCUSDT
+  window: {from: "2026-11-10T02:00:00Z", to: "2026-11-10T03:00:00Z", warmup_s: 60}
+  seeds: [1]
+  fees: {maker_rate: "0.001", taker_rate: "0.001"}
+  sample_ms: 1000
+  sweep:
+    mode: grid
+    params:
+      latency:
+        - {feed: {model: constant, us: 0}, entry: {model: constant, us: 0}, ack: {model: constant, us: 0}}
+        - {feed: {model: constant, us: 5000}, entry: {model: constant, us: 5000}, ack: {model: constant, us: 5000}}
+        - {feed: {model: constant, us: 20000}, entry: {model: constant, us: 20000}, ack: {model: constant, us: 20000}}
+        - {feed: {model: constant, us: 50000}, entry: {model: constant, us: 50000}, ack: {model: constant, us: 50000}}
+      queue_model:
+        - {model: cancel_from_front}
+        - {model: pro_rata}
+        - {model: prob_power, n: 2}
+        - {model: cancel_from_back}
+    labels:
+      latency: ["0 ms", "5 ms", "20 ms", "50 ms"]
+      queue_model: [front, pro rata, power 2, back]
+experiments:
+  - name: sensitivity_mm
+    description: Avellaneda-Stoikov market maker (gamma 0.0005, k 1000, 0.001 a side, at most 0.01)
+    strategy:
+      python: research.strategies.avellaneda_stoikov:AvellanedaStoikov
+      params: {gamma: 0.0005, k: 1000, size: "0.001", max_position: "0.01", refresh_ms: 500}
+  - name: sensitivity_twap
+    description: Passive TWAP buying 0.5 BTC over 50 minutes (post-only at the bid, market catch-up past 20% behind)
+    strategy:
+      python: research.strategies.execution:Executor
+      params: {side: buy, quantity: "0.5", mode: twap, duration_ms: 3000000, style: passive, max_behind: 0.2}
+  - name: sensitivity_imbalance
+    description: Order-book imbalance taker (top level, threshold 0.6, hold 1 s, cooldown 1 s)
+    strategy:
+      python: research.strategies.imbalance_taker:ImbalanceTaker
+      params: {size: "0.001", levels: 1, threshold: 0.6, hold_ms: 1000, cooldown_ms: 1000}

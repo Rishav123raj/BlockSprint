@@ -14,9 +14,10 @@ From Avellaneda and Stoikov, "High-frequency trading in a limit order book" (200
 * gamma: risk aversion (larger: more skew and a wider spread); k: how fast fill intensity falls with
   distance from the mid (per quote unit; larger: tighter quotes); tau = `horizon_s`.
 
-Quotes are post-only LIMIT_MAKER of `size`, the bid rounded down and the ask up to the tick, never closer than
-`min_spread_ticks` to the mid's own side and never crossing the observed book (a quote that would cross is
-moved to one tick inside the other side's best). A side whose next fill would take |position| beyond
+Quotes are post-only LIMIT_MAKER of `size`, the bid rounded down and the ask up to the tick, at least
+`min_spread_ticks` apart around the mid (half of it on each side: with the default 1 and a one-tick spread the
+quotes can join the best bid and ask) and never crossing the observed book (a quote that would cross is moved
+to one tick inside the other side's best). A side whose next fill would take |position| beyond
 `max_position` isn't quoted. Every `refresh_ms` it re-prices by replace (a moved quote loses its queue place,
 as on Binance); while the book is invalid (a gap) it cancels everything.
 
@@ -120,8 +121,9 @@ class AvellanedaStoikov(Strategy):
         bid = math.floor(bid_f * SCALE / tick) * tick
         ask = math.ceil(ask_f * SCALE / tick) * tick
         mid_fixed = (b.price + a.price) / 2
-        bid = min(bid, math.floor((mid_fixed - self.min_spread_ticks * tick) / tick) * tick, a.price - tick)
-        ask = max(ask, math.ceil((mid_fixed + self.min_spread_ticks * tick) / tick) * tick, b.price + tick)
+        half = self.min_spread_ticks * tick / 2  # the quotes at least min_spread_ticks apart, around the mid
+        bid = min(bid, math.floor((mid_fixed - half) / tick) * tick, a.price - tick)
+        ask = max(ask, math.ceil((mid_fixed + half) / tick) * tick, b.price + tick)
         self.quotes += 1
         self._quote_side(ctx, orders, bs.Side.BUY, bid if position + self.size <= self.max_position else None)
         self._quote_side(ctx, orders, bs.Side.SELL, ask if position - self.size >= -self.max_position else None)

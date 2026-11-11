@@ -45,6 +45,7 @@ class RunRecord:
     pnl: str | None = None         # exchange account PnL at the final mark (exact decimal)
     fills: int | None = None
     error: str | None = None
+    labels: dict[str, str] = field(default_factory=dict)  # each swept value's name (Sweep.label)
 
 
 @dataclass
@@ -74,9 +75,10 @@ class ExperimentResult:
         rows = []
         for r in self.runs:
             row = asdict(r)
-            params = row.pop("params")
+            params, labels = row.pop("params"), row.pop("labels")
             rows.append({**{f"param.{k}": (v if isinstance(v, (int, float, str)) else json.dumps(v))
-                            for k, v in params.items()}, **row})
+                            for k, v in params.items()},
+                         **{f"label.{k}": v for k, v in labels.items()}, **row})
         return pl.DataFrame(rows)
 
 
@@ -125,7 +127,8 @@ def run_experiment(exp: Experiment, workers: int | None = None, force: bool = Fa
     todo: list[tuple[RunRecord, RunSpec, dict[str, Any]]] = []
     seen: dict[str, RunRecord] = {}
     for spec, run_id, ident in planned:
-        rec = RunRecord(spec.point, spec.seed, spec.params, run_id)
+        rec = RunRecord(spec.point, spec.seed, spec.params, run_id,
+                        labels={k: exp.label(k, v) for k, v in spec.params.items()})
         result.runs.append(rec)
         if run_id in seen:  # the same run twice in one plan (e.g. a swept value that changes nothing)
             rec.status = "duplicate"
@@ -208,7 +211,7 @@ def _run_pool(todo, n_workers: int, store_root: str, finish) -> None:
 
 
 def _label(rec: RunRecord) -> str:
-    parts = [f"{k}={v}" for k, v in rec.params.items()]
+    parts = [f"{k}={rec.labels.get(k, v)}" for k, v in rec.params.items()]
     return " ".join(parts + [f"seed={rec.seed}"])
 
 

@@ -125,6 +125,26 @@ class Sweep(BaseModel):
     params: dict[str, list[Any] | Distribution]
     samples: int | None = Field(default=None, ge=1)  # random mode
     seed: int = 0                                    # random mode: the draws' seed
+    labels: dict[str, list[str]] = Field(default_factory=dict)  # names for a key's values, in the same order
+
+    @model_validator(mode="after")
+    def _labels(self) -> Sweep:
+        for key, names in self.labels.items():
+            values = self.params.get(key)
+            if not isinstance(values, list):
+                raise ValueError(f"sweep.labels.{key}: label a key of sweep.params that has a list of values")
+            if len(names) != len(values) or len(set(names)) != len(names):
+                raise ValueError(f"sweep.labels.{key}: one distinct label per value ({len(values)})")
+        return self
+
+    def label(self, key: str, value: Any) -> str:
+        """The name of a swept value: its label if the sweep gives one, else the value itself, shortened."""
+        values = self.params.get(key)
+        if key in self.labels and isinstance(values, list):
+            for v, name in zip(values, self.labels[key]):
+                if v == value:
+                    return name
+        return _short(value)
 
     @field_validator("params")
     @classmethod
@@ -195,14 +215,57 @@ class Experiment(BaseModel):
 
     @classmethod
     def load(cls, path: str | Path) -> Experiment:
-        """Reads and validates a YAML file, and checks every run it describes (plan())."""
+        """Reads and validates a YAML file of one experiment, and checks every run it describes (plan())."""
+        exps = cls.load_all(path)
+        if len(exps) != 1:
+            raise ValueError(f"{path}: a suite of {len(exps)} experiments: use Experiment.load_all")
+        return exps[0]
+
+    @classmethod
+    def load_all(cls, path: str | Path) -> list[Experiment]:
+        """The experiments of a YAML file: one experiment, or a suite
+
+            defaults: {dataset: ..., sweep: ...}      # shared settings
+            experiments:                              # each overrides defaults key by key
+              - {name: a, strategy: ...}
+              - {name: b, strategy: ...}
+
+        Each is validated and its runs checked (plan()). Names must differ."""
         with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if not isinstance(data, dict):
             raise ValueError(f"{path}: expected a mapping at the top level")
-        exp = cls.model_validate(data)
-        exp.plan()
-        return exp
+        if "experiments" not in data:
+            items = [data]
+        else:
+            unknown = set(data) - {"experiments", "defaults", "description"}
+            if unknown:
+                raise ValueError(f"{path}: a suite has experiments, defaults and description, not {', '.join(sorted(unknown))}")
+            defaults = data.get("defaults") or {}
+            if not isinstance(defaults, dict) or not isinstance(data["experiments"], list) or not data["experiments"]:
+                raise ValueError(f"{path}: defaults must be a mapping and experiments a non-empty list")
+            items = []
+            for i, item in enumerate(data["experiments"]):
+                if not isinstance(item, dict):
+                    raise ValueError(f"{path}: experiments[{i}] must be a mapping")
+                items.append({**copy.deepcopy(defaults), **item})
+        exps = []
+        for i, item in enumerate(items):
+            try:
+                exp = cls.model_validate(item)
+                exp.plan()
+            except ValueError as e:
+                where = f"experiments[{i}] ({item.get('name', '?')})" if len(items) > 1 or "experiments" in data else ""
+                raise ValueError(f"{where}: {e}" if where else str(e)) from None
+            exps.append(exp)
+        names = [e.name for e in exps]
+        if len(set(names)) != len(names):
+            raise ValueError(f"{path}: experiment names must differ ({', '.join(names)})")
+        return exps
+
+    def label(self, key: str, value: Any) -> str:
+        """The name of a swept value (Sweep.label)."""
+        return self.sweep.label(key, value) if self.sweep else _short(value)
 
     def base_config(self) -> dict[str, Any]:
         """The run config before the sweep and the seed (output.dir is set per run by the runner)."""
