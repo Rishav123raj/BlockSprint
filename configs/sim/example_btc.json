@@ -1,6 +1,6 @@
 {
   "description": "Example run: a passive quoter on BTCUSDT, 2026-11-05 02:00-08:00 UTC, Tokyo VPS latency",
-  "dataset": "data/packed/binance_spot_BTCUSDT-ETHUSDT_2026-11-05_2026-11-05",
+  "dataset": "data/packed/binance_spot_btc_eth_1105_1107",
   "symbol": "BTCUSDT",
   "window": {"from": "2026-11-05T02:00:00Z", "to": "2026-11-05T08:00:00Z", "warmup_s": 60},
   "seed": 42,

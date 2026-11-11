@@ -150,4 +150,58 @@ std::vector<bse::Record> slice(Replayer& replayer, int64_t from, int64_t to) {
     return out;
 }
 
+std::vector<BboPoint> bbo_timeline(const std::string& path, uint64_t from_ns, uint64_t to_ns) {
+    Replayer replayer(path);
+    const int64_t tick = replayer.header().tick_size, lot = replayer.header().lot_size;
+    Reconstructor r;
+    std::vector<BboPoint> out;
+    BboPoint cur{from_ns, 0, 0, 0, 0};
+    auto current = [&](uint64_t t) {
+        BboPoint p{t, 0, 0, 0, 0};
+        if (r.valid()) {
+            if (const auto b = r.book().best_bid()) {
+                p.bid = b->px * tick;
+                p.bid_qty = b->qty * lot;
+            }
+            if (const auto a = r.book().best_ask()) {
+                p.ask = a->px * tick;
+                p.ask_qty = a->qty * lot;
+            }
+        }
+        return p;
+    };
+    auto same = [](const BboPoint& a, const BboPoint& b) {
+        return a.bid == b.bid && a.bid_qty == b.bid_qty && a.ask == b.ask && a.ask_qty == b.ask_qty;
+    };
+
+    uint64_t data_time = 0;
+    bool started = false;
+    Batch b{};
+    while (replayer.next(b)) {
+        const uint64_t ts = b.ts_local() > 0 ? static_cast<uint64_t>(b.ts_local()) : 0;
+        data_time = std::max(data_time, ts);
+        if (to_ns && data_time >= to_ns) {
+            break;
+        }
+        if (!started && data_time >= from_ns) {
+            out.push_back(cur);  // the book as of from_ns
+            started = true;
+        }
+        r.apply(b);
+        if (!b.is_book()) {
+            continue;
+        }
+        const BboPoint p = current(started ? data_time : from_ns);
+        if (!started) {
+            cur = p;
+        } else if (!same(p, out.back())) {
+            out.push_back(p);
+        }
+    }
+    if (!started) {
+        out.push_back(cur);
+    }
+    return out;
+}
+
 } // namespace sim

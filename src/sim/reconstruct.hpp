@@ -14,6 +14,7 @@
 
 #include <cstdint>
 #include <ostream>
+#include <string>
 #include <vector>
 
 namespace sim {
@@ -65,5 +66,20 @@ void write_checkpoint(std::ostream& out, uint64_t batch, int64_t ts, const Recon
 // gap), the slice must start with a snapshot of the data; otherwise throws std::invalid_argument. Replays
 // from the start of the file.
 std::vector<bse::Record> slice(Replayer& replayer, int64_t from, int64_t to);
+
+// The data's best bid and ask over time (P5.4), for analytics: what the simulator's mark (the data's mid) is
+// at any moment. Prices and quantities in 1e-8 units; 0 for a side with no level, and both sides 0 while the
+// book isn't valid (before the first snapshot, in a gap).
+struct BboPoint {
+    uint64_t ts_ns;
+    int64_t bid, bid_qty, ask, ask_qty;
+};
+
+// Replays the whole file (as the simulator does) and returns one row at from_ns with the book as of then
+// (after every batch before from_ns), then one row per book batch with from_ns <= time < to_ns (to_ns 0:
+// the end) after which the best bid or ask (price or quantity) has changed. A batch's time is its ts_local,
+// never earlier than the previous batch's, as in the simulator. So the BBO at time t is the last row with
+// ts_ns <= t: the book after every batch up to and including t.
+std::vector<BboPoint> bbo_timeline(const std::string& path, uint64_t from_ns, uint64_t to_ns);
 
 } // namespace sim

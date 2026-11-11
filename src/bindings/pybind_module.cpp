@@ -21,6 +21,7 @@
 // rows (no copy; each array keeps the rows alive). result_codes() names the enum codes with the CSV's
 // strings. research/sim/results.py wraps both (Results, to_polars).
 #include "config.hpp"
+#include "reconstruct.hpp"
 #include "run.hpp"
 #include "strategies/registry.hpp"
 
@@ -290,6 +291,7 @@ PYBIND11_MODULE(blocksprint_sim, m) {
                              book_ask, book_ask_qty, seen_bid, seen_bid_qty, seen_ask, seen_ask_qty, seen_data_ns);
     PYBIND11_NUMPY_DTYPE(PositionRow, ts_ns, owner, position, cash, fees, mark, pnl, fills, maker_fills, taker_fills,
                              open_orders, base_volume, quote_volume);
+    PYBIND11_NUMPY_DTYPE(BboPoint, ts_ns, bid, bid_qty, ask, ask_qty);
 
 
     // std::invalid_argument (bad config keys, unknown strategy or parameter) arrives as ValueError;
@@ -528,6 +530,23 @@ PYBIND11_MODULE(blocksprint_sim, m) {
              "research.sim.results.Results wraps this.");
 
     m.def("result_codes", &result_codes, "Enum code -> the CSV's string, per enum column of Simulator.tables()");
+
+    m.def(
+        "data_bbo",
+        [](const std::string& path, uint64_t from_ns, uint64_t to_ns) {
+            std::vector<BboPoint>* rows = nullptr;
+            {
+                py::gil_scoped_release release;
+                rows = new std::vector<BboPoint>(bbo_timeline(path, from_ns, to_ns));
+            }
+            py::capsule base(rows, [](void* p) { delete static_cast<std::vector<BboPoint>*>(p); });
+            return py::array_t<BboPoint>({static_cast<py::ssize_t>(rows->size())},
+                                         {static_cast<py::ssize_t>(sizeof(BboPoint))}, rows->data(), base);
+        },
+        py::arg("path"), py::arg("from_ns") = 0, py::arg("to_ns") = 0,
+        "The data's best bid and ask over time from a .bse file (P5.4): a structured array (ts_ns, bid, bid_qty, "
+        "ask, ask_qty; 1e-8 units, 0 = no level or no valid book): the book as of from_ns, then a row per change "
+        "before to_ns (0: the end). The BBO at t is the last row with ts_ns <= t; the simulator's mark is its mid.");
 
     m.def(
         "run",

@@ -597,7 +597,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 
 ```json
 {
-  "dataset": "data/packed/binance_spot_BTCUSDT-ETHUSDT_2026-11-05_2026-11-05",
+  "dataset": "data/packed/binance_spot_btc_eth_1105_1107",
   "symbol": "BTCUSDT",
   "window": {"from": "2026-11-05T00:00:00Z", "to": "2026-11-05T06:00:00Z", "warmup_s": 60},
   "seed": 42,
