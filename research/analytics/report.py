@@ -506,10 +506,11 @@ def tearsheet(run: Any, market: MarketData | None = None, every: str | None = No
     except ValueError:
         qp = None
 
-    name = strat.get("name", "")
-    if meta.get("python_strategy") or (meta.get("identity") or {}).get("python_strategy"):
-        ps = meta.get("python_strategy") or meta["identity"]["python_strategy"]
-        name = ps.get("class", name)
+    # A Python strategy: run_meta.json names it (python_strategy); a stored run's identity has its params
+    name, params = strat.get("name", ""), strat.get("params", {})
+    if isinstance(meta.get("python_strategy"), str):
+        name = meta["python_strategy"]
+        params = ((meta.get("identity") or {}).get("python_strategy") or {}).get("params", {})
     run_id = meta.get("run_id", "")
     head = title or f"{name} on {meta.get('data', {}).get('symbol', cfg.get('symbol', ''))}"
     body = []
@@ -520,7 +521,7 @@ def tearsheet(run: Any, market: MarketData | None = None, every: str | None = No
                 f'{" · run " + _e(run_id) if run_id else ""}</p>')
     lat = cfg.get("latency_preset") or "custom latency"
     qm = cfg.get("queue_model", {})
-    settings = [("strategy", f"{name} {_short(strat.get('params', {}))}"), ("owner", owner),
+    settings = [("strategy", f"{name} {_short(params)}"), ("owner", owner),
                 ("dataset", str(meta.get("data", {}).get("file", cfg.get("dataset", "")))),
                 ("window", f"{_utc_full(start)} + warm-up {(trading - start) / 1e9:g} s"),
                 ("latency", lat), ("queue model", _short(qm)), ("seed", str(cfg.get("seed", ""))),

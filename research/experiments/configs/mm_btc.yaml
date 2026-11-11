@@ -1,10 +1,10 @@
 # Market making on BTCUSDT, one hour of the recorded day (Phase 5 acceptance: a tearsheet per run and a
 # comparison report; running it again takes every run from the store and writes the same pages):
 #   python -m research.run research/experiments/configs/mm_btc.yaml
-# Needs the packed Nov 10 dataset (docs/data_pipeline.md). 3 refresh intervals x 3 position limits = 9 runs.
-# The strategy is the C++ PassiveQuoter until the Avellaneda-Stoikov market maker (P5.10) replaces it.
+# Needs the packed Nov 10 dataset (docs/data_pipeline.md). The Avellaneda-Stoikov market maker (P5.10),
+# risk aversion gamma x fill-intensity decay k: 9 runs.
 name: mm_btc
-description: PassiveQuoter on BTCUSDT 2026-11-10 02:00-03:00 UTC, Tokyo latency, refresh interval x position limit
+description: Avellaneda-Stoikov on BTCUSDT 2026-11-10 02:00-03:00 UTC, Tokyo latency, gamma x k
 dataset: data/packed/binance_spot_btc_eth_1110
 symbol: BTCUSDT
 window: {from: "2026-11-10T02:00:00Z", to: "2026-11-10T03:00:00Z", warmup_s: 60}
@@ -14,10 +14,10 @@ queue_model: {model: cancel_from_back}
 fees: {maker_rate: "0.001", taker_rate: "0.001"}
 sample_ms: 1000
 strategy:
-  name: passive_quoter
-  params: {size: "0.001", refresh_ms: 500, max_position: "0.01"}
+  python: research.strategies.avellaneda_stoikov:AvellanedaStoikov
+  params: {size: "0.001", max_position: "0.01", refresh_ms: 500, horizon_s: 30}
 sweep:
   mode: grid
   params:
-    strategy.params.refresh_ms: [250, 500, 1000]
-    strategy.params.max_position: ["0.005", "0.01", "0.02"]
+    strategy.params.gamma: [0.0005, 0.005, 0.05]
+    strategy.params.k: [10, 100, 1000]
