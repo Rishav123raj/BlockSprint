@@ -111,6 +111,19 @@ class MarketData:
         return {"ts_ns": t["ts_ns"].astype(np.int64), "px": t["px"].astype(np.float64) / SCALE,
                 "qty": t["qty"].astype(np.float64) / SCALE, "buy": t["side"] == 0}
 
+    def level_qty(self, ts_ns: Any, side: Any, px: Any) -> np.ndarray:
+        """The data's quantity (base units) at each (time, side 0 bid / 1 ask, price in quote units), in the book
+        after every batch up to and including that time; 0 for no level, NaN while the book isn't valid. One
+        replay of the file per call."""
+        if self._source is None:
+            raise ValueError("MarketData: level quantities need the run's file (MarketData.for_run)")
+        ts = np.asarray(ts_ns, dtype=np.uint64)
+        if len(ts) == 0:
+            return np.zeros(0)
+        q = bs.data_level_qty(self._source[0], ts, np.asarray(side, dtype=np.uint8),
+                              np.round(np.asarray(px, dtype=np.float64) * SCALE).astype(np.int64))
+        return np.where(q >= 0, q.astype(np.float64) / SCALE, np.nan)
+
     def vwap(self, from_ns: int, to_ns: int) -> tuple[float, float]:
         """(VWAP, volume) of the data's trades with from_ns <= ts < to_ns; VWAP NaN without trades."""
         t = self.trades()

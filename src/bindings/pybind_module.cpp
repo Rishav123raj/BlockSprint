@@ -566,6 +566,21 @@ PYBIND11_MODULE(blocksprint_sim, m) {
         "aggressor, 0 buy / 1 sell) for from_ns <= ts_ns < to_ns (0: the end).");
 
     m.def(
+        "data_level_qty",
+        [](const std::string& path, std::vector<uint64_t> ts_ns, std::vector<uint8_t> side, std::vector<int64_t> px) {
+            std::vector<int64_t> out;
+            {
+                py::gil_scoped_release release;
+                out = level_quantities(path, ts_ns, side, px);
+            }
+            return py::array_t<int64_t>(static_cast<py::ssize_t>(out.size()), out.data());
+        },
+        py::arg("path"), py::arg("ts_ns"), py::arg("side"), py::arg("px"),
+        "The data's quantity at price levels and times from a .bse file (P5.7): for each (ts_ns, side 0 bid / 1 "
+        "ask, px in 1e-8 units) the level's quantity in 1e-8 units after every batch up to ts_ns; 0 for no level, "
+        "-1 while the book isn't valid. One replay answers all the queries, in any order.");
+
+    m.def(
         "run",
         [](const py::object& config, const std::vector<std::string>& overrides) {
             const RunConfig rc = resolve(config, overrides);

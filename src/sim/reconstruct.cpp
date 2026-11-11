@@ -229,4 +229,44 @@ std::vector<TradePoint> trade_list(const std::string& path, uint64_t from_ns, ui
     return out;
 }
 
+std::vector<int64_t> level_quantities(const std::string& path, const std::vector<uint64_t>& ts_ns,
+                                      const std::vector<uint8_t>& side, const std::vector<int64_t>& px) {
+    if (side.size() != ts_ns.size() || px.size() != ts_ns.size()) {
+        throw std::invalid_argument("level_quantities: ts_ns, side and px must have the same length");
+    }
+    std::vector<size_t> order(ts_ns.size());
+    for (size_t i = 0; i < order.size(); ++i) {
+        order[i] = i;
+    }
+    std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) { return ts_ns[a] < ts_ns[b]; });
+
+    Replayer replayer(path);
+    const int64_t tick = replayer.header().tick_size, lot = replayer.header().lot_size;
+    Reconstructor r;
+    std::vector<int64_t> out(ts_ns.size(), -1);
+    size_t next = 0;
+    auto answer_until = [&](uint64_t t, bool inclusive) {  // queries before t (or at t, inclusive)
+        while (next < order.size() && (inclusive ? ts_ns[order[next]] <= t : ts_ns[order[next]] < t)) {
+            const size_t q = order[next++];
+            if (!r.valid()) {
+                continue;  // -1
+            }
+            if (side[q] > 1) {
+                throw std::invalid_argument("level_quantities: side must be 0 (bid) or 1 (ask)");
+            }
+            out[q] = px[q] > 0 && px[q] % tick == 0 ? r.book().qty(side[q], px[q] / tick) * lot : 0;
+        }
+    };
+    uint64_t data_time = 0;
+    Batch b{};
+    while (next < order.size() && replayer.next(b)) {
+        const uint64_t ts = b.ts_local() > 0 ? static_cast<uint64_t>(b.ts_local()) : 0;
+        data_time = std::max(data_time, ts);
+        answer_until(data_time, false);  // the book after every batch before this one's time
+        r.apply(b);
+    }
+    answer_until(UINT64_MAX, true);  // after the last batch
+    return out;
+}
+
 } // namespace sim

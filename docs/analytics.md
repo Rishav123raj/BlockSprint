@@ -122,3 +122,32 @@ markout_curve(run, np.geomspace(1e6, 6e10, 30).astype(int), by=("liquidity",))  
 - **TWAP:** a taker pays a little at once. After that the market rose that afternoon, so its later markouts are positive, but with only 85 fills the standard errors (0.3–0.9 bps) are as large as the means.
 
 The markouts for the 6-hour run take 0.9 s.
+
+## Queue analytics (`queue.py`, P5.7)
+
+```python
+from research.analytics import queue
+queue.placements(run)              # one row per passive placement
+queue.fill_curve(run)              # fill probability by queue ahead at entry (10 quantile bins; or bins=[edges])
+queue.fill_curve(run, by="ticks")  # ... by distance from the best price
+queue.summary(run)                 # one row per strategy
+```
+
+- **Passive placements:** limit and post-only placements (from `tca.orders`) that were accepted and never took liquidity.
+- **Queue ahead at entry** (`ahead_qty`, and `ahead_ratio` in multiples of the order's own size): the displayed quantity already at the placement's price when it reached the exchange. It comes from the data via `blocksprint_sim.data_level_qty`, a C++ replay that answers any number of (time, side, price) queries at once. So it is the same for every queue model; the models differ in how fast that quantity drains.
+- **`ticks_from_best`:** 0 joined the best price, > 0 sat behind it, < 0 improved it (a new level, nothing ahead).
+- **Time in queue:** from arrival to the first fill, or to the end (cancel, replace, the run's end).
+- **`traded_at_price` / `traded_through`:** the data's trades by the other side's aggressors while the order rested, at its price and beyond it.
+- **`fifo_reachable`:** those trades exceed the queue ahead, so trades alone would have reached the order under first-in-first-out.
+  - Orders that weren't reachable still fill. The queue ahead also shrinks when the displayed level is cancelled down past it (how much depends on the queue model) and when the market moves through the price.
+  - `summary` gives the fill rate of both groups.
+
+**On real data,** passive quoter `configs/sim/example_btc.json` (cancel_from_back, Tokyo latency): 7,911 placements; the query takes 1.6 s.
+- **Where it joined:** 99.9% at the best price.
+- **Queue ahead:** median 5.7 BTC, i.e. 5,700 times its own 0.001.
+- **Fill rates:** 48% overall. Only 6.6% were reachable by trades alone; those all filled, and 45% of the rest filled too.
+
+| Queue ahead at entry (BTC) | < 0.05 | 0.05–0.31 | 0.31–0.87 | 0.87–2.0 | 2.0–5.7 | 5.7–8.2 | 8.2–10.3 | 10.3–11.8 | 11.8–13.2 | > 13.2 |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fill rate | 95% | 89% | 82% | 75% | 49% | 24% | 20% | 18% | 15% | 17% |
+| Median time to fill (s) | 0.26 | 0.81 | 1.78 | 2.37 | 4.73 | 6.27 | 5.84 | 7.75 | 8.06 | 8.30 |

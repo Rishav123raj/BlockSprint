@@ -94,4 +94,11 @@ struct TradePoint {
 
 std::vector<TradePoint> trade_list(const std::string& path, uint64_t from_ns, uint64_t to_ns);
 
+// The data's quantity at given price levels and times (P5.7, queue position at entry): for each query
+// (ts_ns[i], side[i]: 0 bid / 1 ask, px[i] in 1e-8 units) the level's quantity in 1e-8 units in the book after
+// every batch up to and including ts_ns[i] (as bbo_timeline's "BBO at t"); 0 for no level (or a price off the
+// tick grid), -1 while the book isn't valid. Queries may come in any order; one replay answers them all.
+std::vector<int64_t> level_quantities(const std::string& path, const std::vector<uint64_t>& ts_ns,
+                                      const std::vector<uint8_t>& side, const std::vector<int64_t>& px);
+
 } // namespace sim
