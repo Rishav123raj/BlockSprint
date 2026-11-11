@@ -58,6 +58,7 @@
 | 2026-11-10 | Phase 4 accepted | CI run for 31df661: `Python / Windows` and `Python / Linux` green (uv sync on fresh runners, the suite on the editable build and on the built wheel in a clean environment; wheels 446 kB / 669 kB as artifacts). The first P4.8 run failed only because the location check assumed the environment sat outside the checkout; fixed. All Phase 4 acceptance criteria met: tag `v2.0.0-p4` |
 | 2026-11-10 | P5.1-P5.3 done | `research/experiments/schema.py`: pydantic `Experiment` (YAML): the run-config settings, seeds, a C++ or Python (`module:Class`) strategy with params, grid or random sweep over dotted config paths (`strategy.params.*` for either kind; uniform / log_uniform / int distributions, seeded); loading checks every run through the C++ resolver (now including C++ strategy params: `SimConfig` builds the strategy once; this also made a P4.7 parity assertion real, it had passed on an unrelated error) and builds Python strategies. `store.py`: `results/<run_id>/` with the five tables as Parquet + run_meta.json; run_id = SHA-256 of resolved config (minus output dir and dataset path), data SHA-256, **compiled module SHA-256** and Python strategy source hashes (instead of the plan's git SHA: catches uncommitted changes; git kept as provenance); atomic rename. `runner.py` + `python -m research.run EXP.yaml [--workers N] [--force] [--dry-run]`: cache hits skipped, ProcessPoolExecutor, failures isolated (exceptions per run; a dead worker breaks the pool, then each unfinished run is retried alone), progress lines, `results/experiments/<name>/summary.json`. Tests: schema errors, identity (moved data = same id), the pinned C++ hash reproduced through an experiment, cache hit with identical numbers, `os._exit` worker crash. Real data: 4 one-hour runs 23.2 s (1 worker) / 13.8 s (4). docs/experiments.md. New deps: pydantic, pyyaml. 95 Python tests |
 | 2026-11-11 | P5.4 done | `blocksprint_sim.data_bbo` (C++ `bbo_timeline` in `src/sim/reconstruct.*`): the data's BBO over time, rebuilt with the simulator's rules, one row per change (Nov 10 BTCUSDT: 638,520 rows, ~5 s); its mid equals the simulator's mark at every sample. `research/analytics/market.py`: `MarketData` (mid / BBO at any time, "right" = after batches at t, as a fill sees it; "left" = before, as samples do). `research/analytics/pnl.py`: `fills` (mid and edge per fill), `decompose` (pnl = spread capture (maker / taker) + inventory - fees, residual vs the engine), `pnl_buckets` (the same per time bucket: returns; cumulative pnl equals positions.csv at every sample). No change to the simulator's outputs or hashes. Example config (Nov 5 02:00-08:00): -346.18 = -3.37 spread - 34.05 inventory - 308.76 fees, residual 0. docs/analytics.md. Also: the Nov 10 pack `binance_spot_btc_eth_1110`; the single-day Nov 5 pack removed (example config now on the Nov 5-7 pack, identical fills and PnL); recorder stopped (disk). 103 Python tests |
+| 2026-11-11 | Phase 2 accepted (exception) | Nov 10 checked end to end: raw stream 0 sequence / trade-ID gaps within each connection, one connection drop at 15:44 UTC (~23 s lost); normalized, QC pass (100% coverage, 145/145 snapshots); V0 identical; packed `binance_spot_btc_eth_1110`, `catalog verify` OK; a full-day `bs_sim run` (BTCUSDT, 4.7 M batches, 3 gaps resynced) in 60 s. Criterion "3 full clean days" accepted with this one day instead (recorder stopped for disk space). Tag `v2.0.0-p2` |
 
 ---
 
@@ -366,10 +367,10 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 | `flags` | uint16 | bit0 `LAST_IN_BATCH`, bit1 `FROM_SNAPSHOT`, bit2 `DUPLICATE_SUSPECT` |
 
 ### Acceptance criteria
-- [ ] ≥ 3 full clean days for BTCUSDT and ETHUSDT normalized, QC green, and packed. (Pipeline ready; waiting on complete recording days: best so far 61.5% coverage.)
+- [x] ≥ 3 full clean days for BTCUSDT and ETHUSDT normalized, QC green, and packed. **Accepted as an exception (2026-11-11):** one full day, 2026-11-10, normalized, QC pass (100% minute coverage, 145/145 snapshots per symbol), V0 identical (44/44, 43/43), packed as `binance_spot_btc_eth_1110` and hash-verified. It has one documented gap: connection 28 dropped at 15:44:36 UTC (keepalive ping timeout) and the book resynced at 15:44:59, about 23 s lost (BTC 202,268 updates and 21,443 trades, ETH 131,233 and 8,562; ~99.94% of the day). The recorder was stopped for disk space, so no further days will come from this machine; three zero-gap days are left for a VPS recorder.
 - [x] The Python reference book matches 100% of periodic snapshots on clean segments (361/361 on Nov 2–6).
 - [x] `catalog.py list` shows the datasets with hashes.
-- [ ] Tag `v2.0.0-p2`.
+- [x] Tag `v2.0.0-p2`. (2026-11-11)
 
 ### Risks
 - **Recorder downtime loses data permanently.** Mitigation: deploy on a VPS, add alerting (e.g. an hourly health file check), and consider running two recorders in different locations later.
@@ -668,7 +669,7 @@ Tick these off as phases complete.
 
 **Phase 2: Historical Data Layer**
 - [x] P2.0 Package  - [x] P2.1 Recorder  - [x] P2.2 Snapshots  - [x] P2.3 Rotation  - [x] P2.4 Resilience
-- [x] P2.5 Metadata  - [x] P2.6 Deployment (Windows scheduled task "BlockSprint Recorder", running since 2026-11-02; Tokyo VPS still recommended for latency work)  - [x] P2.7 Normalizer  - [x] P2.8 Parquet  - [x] P2.9 Ref book
+- [x] P2.5 Metadata  - [x] P2.6 Deployment (Windows scheduled task "BlockSprint Recorder", ran 2026-11-02 to 2026-11-11, now stopped and disabled (disk space); Tokyo VPS still recommended for latency work)  - [x] P2.7 Normalizer  - [x] P2.8 Parquet  - [x] P2.9 Ref book
 - [x] P2.10 QC  - [x] P2.11 Downloader  - [x] P2.12 Packer  - [x] P2.13 Catalog  - [x] P2.14 Tests
 
 **Phase 3: C++ Simulator Core**
