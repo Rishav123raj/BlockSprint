@@ -31,7 +31,23 @@ The quoter run: 7.28 M events, 20,463 orders, 86,305 fills.
 | Target | Result |
 | :--- | :--- |
 | Replay-only ≥ 5 M events/s | **met:** 16.3 M records/s |
-| One-day BTCUSDT `PassiveQuoter` run < 30 s | **met on the best recorded day:** 25.1 s for 26.8 M records (74.65% coverage). A fully covered day would have about 36 M records, about **34 s** at the same rate, so not yet met for a complete day |
+| One-day BTCUSDT `PassiveQuoter` run < 30 s | **not met for a complete day: 33.1 s** on Nov 10 (34.0 M records, 100% coverage), about 10% over. Met on the partly covered Nov 6 (25.1 s, 74.65%). Accepted at Phase 3's close; the engine work below is the way to meet it |
+
+## A fully covered day (2026-11-11)
+
+**Data:** BTCUSDT 2026-11-10, the whole `binance_spot_btc_eth_1110` file: 34.0 M records over 24 h, 100% of the book covered (three short resyncs, 0 gap minutes).
+
+**Conditions:** the same laptop and MSVC Release build, on mains power, best of 2 runs, each stage in its own process. As a control, Nov 6 was rerun in the same session: the quoter took 25.98 s with the same 7,283,892 events, 20,463 orders and 86,305 fills, so the conditions match the table above. On battery the same machine is about 1.75x slower (Nov 6: 44.4 s), so timings must be taken on mains.
+
+| Stage | Seconds | M records/s |
+| :--- | ---: | ---: |
+| scan | 0.97 | 35.2 |
+| reconstruct | 2.09 | **16.3** |
+| synth | 28.4 | 1.20 |
+| sim null | 33.4 | 1.02 |
+| sim quoter | **33.1** | 1.03 |
+
+The quoter run: 9.90 M events, 26,306 orders, 122,085 fills. The rate per record is the same as on Nov 6, so the day takes longer only because it has 27% more records.
 
 ## What changed
 
