@@ -63,6 +63,7 @@
 | 2026-11-11 | P5.6 done | `research/analytics/markouts.py`: `fill_markouts` (per fill, s x (m(t + h) - price) in bps and quote at each horizon; default 0, 100 ms, 1 s, 5 s, 30 s, 60 s; null past the end of the data, which `MarketData` now knows from the run's header) and `markout_curve` (per strategy and group, default liquidity x side: fills, qty, quantity-weighted mean, median, standard error, pnl). Positive = good for the strategy. Tests: hand-computed values and averages, the end of the data, h = 0 equals P5.4's spread capture and the later move equals half of P5.5's price impact. Real data: the quoter's curve falls from -0.11 bps at 0 to -1.13 bps at 60 s (adverse selection); a Nov 10 TWAP buy rises to about +0.6 bps (the market went up). docs/analytics.md. 114 Python tests |
 | 2026-11-11 | P5.7 done | `blocksprint_sim.data_level_qty` (C++ `level_quantities`): the data's quantity at any (time, side, price), one replay for all queries, -1 while the book is invalid. `research/analytics/queue.py`: `placements` (passive placements: queue ahead at entry measured on the data, so independent of the queue model; ticks from the best; time in queue; outcome; trades at / through the price while resting; `fifo_reachable`), `fill_curve` (fill probability by queue ahead, quantile or given bins, or by ticks from the best), `summary`. 4 tests: the level query against the BBO timeline (any order, invalid book, off-grid), a hand-computed case, the quoter on the slice. Real data: quoter 6 h, 7,911 placements, 99.9% at the best; fill rate falls from 95% (< 0.05 BTC ahead) to 15-17% (> 11.8 BTC). docs/analytics.md. 118 Python tests |
 | 2026-11-11 | P5.8 done | `research/analytics/risk.py`: `ratios` (Sharpe, Sortino from bucket PnL, annualized over 365 days; hit rate, best, worst), `drawdown` / `drawdown_series` (on the engine's mark-to-mid PnL samples: max, peak, trough, recovery, duration), `inventory` (time-weighted position distribution from the exact fill path: mean, |mean|, std, quantiles, flat / long / short, notional), `limits` (time at the position limit, from `position_limit` or the strategy's `max_position`; samples at `limits.open_orders`; limit rejects), `turnover` (volume, per hour, inventory turnover, holding time), `summary`. 4 tests: hand-computed ratios, drawdown, inventory, limits and turnover; the quoter on the slice against the engine's account. Real data: quoter 6 h, drawdown = the whole -346, at the 0.01 limit 7.9% of the time, holding time ~71 s. docs/analytics.md. 122 Python tests |
+| 2026-11-11 | P5.9 done | `research/analytics/report.py`: a self-contained HTML tearsheet per run (settings, headline figures, PnL and drawdown, the PnL split, position, markout curve, fill rate by queue ahead, TCA / risk / reject tables) and a comparison per experiment (heatmaps of PnL, fills, 5 s markout and max drawdown over each pair of swept parameters, mean over seeds; every run linked). Inline SVG with hover / keyboard read-outs, a table under every chart, light and dark, the dataviz reference palette; no network. Pages carry no times or cache status: a rerun writes identical bytes. `python -m research.run` writes them (`--no-report`); `python -m research.analytics.report RUN_ID`. `research/experiments/configs/mm_btc.yaml` (quoter, Nov 10 02:00-03:00, refresh x position limit): 9 runs in 29.5 s + reports ~10 s; again: 9 cached, 10 pages byte-identical. Checked rendered in Edge (desktop, narrow). 5 tests. docs/analytics.md. 127 Python tests |
 
 ---
 
@@ -476,7 +477,7 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 | P5.13 | Tests: analytics on synthetic fills with known answers (e.g. a hand-computed markout) | `tests/python/analytics/` | 1 |
 
 ### Acceptance criteria
-- [ ] `python -m research.run research/experiments/configs/mm_btc.yaml` produces a tearsheet; running it again hits the cache and gives identical numbers.
+- [x] `python -m research.run research/experiments/configs/mm_btc.yaml` produces a tearsheet; running it again hits the cache and gives identical numbers. (2026-11-11: 9 runs; the rerun takes all 9 from the store and writes byte-identical pages. The strategy is the C++ quoter until P5.10.)
 - [ ] A sensitivity sweep with ≥ 16 runs completes and produces a comparison report.
 - [ ] Analytics unit tests pass.
 - [ ] Tag `v2.0.0-p5`.
@@ -688,7 +689,7 @@ Tick these off as phases complete.
 
 **Phase 5: Research Toolkit**
 - [x] P5.1 Schema  - [x] P5.2 Store  - [x] P5.3 Runner/sweep  - [x] P5.4 PnL  - [x] P5.5 TCA
-- [x] P5.6 Markouts  - [x] P5.7 Queue analytics  - [x] P5.8 Risk  - [ ] P5.9 Tearsheet
+- [x] P5.6 Markouts  - [x] P5.7 Queue analytics  - [x] P5.8 Risk  - [x] P5.9 Tearsheet
 - [ ] P5.10 Strategies  - [ ] P5.11 Notebooks  - [ ] P5.12 Sensitivity  - [ ] P5.13 Tests
 
 **Phase 6: Realism Extensions**

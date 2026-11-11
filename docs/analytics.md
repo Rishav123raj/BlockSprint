@@ -179,3 +179,51 @@ Everything is measured from the end of the warm-up.
 - **Drawdown:** 346.18. The PnL never rose above 0, so the drawdown is the whole loss, over all 5 h 59 m.
 - **Inventory:** mean +0.0035 BTC, mean absolute 0.0063. Long 73% of the time, short 26%, flat 1%. At the ±0.01 limit 7.9% of the time; mean absolute notional 505 USDT.
 - **Turnover:** 51,604 USDT per hour; inventory turned over 611 times, a holding time of about 71 s.
+
+## Tearsheets and comparison reports (`report.py`, P5.9)
+
+`python -m research.run EXPERIMENT.yaml` writes them after the runs (`--no-report` skips them):
+
+```text
+results/experiments/<name>/report.html            the comparison: heatmaps over the swept parameters, every run
+results/experiments/<name>/runs/<run_id>.html     a tearsheet per run
+```
+
+```python
+from research.analytics import report
+report.write_tearsheet(run, "tearsheet.html")      # a Results or a StoredRun
+report.write_reports(result, experiment)           # what research.run does
+```
+
+```text
+python -m research.analytics.report RUN_ID [--results results] [--out FILE]   # one stored run
+```
+
+**What's on a tearsheet:**
+- **Settings and headline figures:** PnL, its three parts, fills, fill ratio, max drawdown, the 5 s markout.
+- **Charts:**
+  - the mark-to-mid PnL, and its drawdown;
+  - the PnL split, cumulative;
+  - the position;
+  - the markout curve by liquidity and side;
+  - the fill rate by queue ahead at entry.
+- **Tables:** TCA, risk and rejects.
+- **PnL buckets:** the longest of 1 s … 1 h that gives at least 30 (`auto_every`), unless `every` is given.
+
+**What's on the comparison:**
+- **Heatmaps** of PnL, fills, the 5 s markout and max drawdown. They are drawn over each pair of swept parameters (up to three pairs), averaged over seeds and the other parameters. With one swept parameter they are a single row.
+  - Signed metrics run red, through gray at 0, to blue; magnitudes use the blue ramp.
+  - A failed point is an empty cell.
+- **A table of every run,** linked to its tearsheet, with failures listed.
+
+**How the pages are built:**
+- **Self-contained:** the charts are inline SVG, and a few lines of inline script give hover and keyboard read-outs. Nothing is loaded from the network. Every chart has its numbers in a table below it. Light and dark themes come from the system setting.
+- **Byte-identical on a rerun:** the pages carry no times and don't say whether a run came from the store, so running an experiment again rewrites the same bytes. A test checks this.
+
+**Phase 5 acceptance:** `python -m research.run research/experiments/configs/mm_btc.yaml` runs the quoter on 1 hour of Nov 10 BTCUSDT: 3 refresh intervals × 3 position limits.
+- **First run:** 9 runs in 29.5 s with 4 workers, then the reports in about 10 s.
+- **Second run:** all 9 runs come from the store, and the 10 pages are byte-identical.
+- **What the heatmaps show:**
+  - Faster refreshing and a larger position limit bring more fills: 1,350 to 2,286.
+  - They also bring bigger losses: −33 to −51.
+  - The 5 s markout is about −1.15 bps everywhere.

@@ -1,4 +1,5 @@
-"""python -m research.run EXPERIMENT.yaml: run an experiment through the store (P5.3).
+"""python -m research.run EXPERIMENT.yaml: run an experiment through the store (P5.3), then write its tearsheets and
+comparison report (P5.9, research/analytics/report.py; --no-report skips them).
 
 research/experiments/runner.py describes what happens; research/experiments/schema.py the file format.
 """
@@ -21,6 +22,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--force", action="store_true", help="run again even what is in the store")
     ap.add_argument("--results", help="the store's root (default: the experiment's `results`, else results/)")
     ap.add_argument("--dry-run", action="store_true", help="list the runs and whether each is cached; run nothing")
+    ap.add_argument("--no-report", action="store_true",
+                    help="don't write the tearsheets and the comparison report (research.analytics.report)")
     args = ap.parse_args(argv)
 
     try:
@@ -40,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     result = run_experiment(exp, workers=args.workers, force=args.force)
+    if not args.no_report and len(result.failed) < len(result.runs):
+        from research.analytics.report import write_reports
+
+        write_reports(result, exp)
     for rec in result.failed:
         print(f"\nFAILED {rec.run_id} point {rec.point} seed {rec.seed}:\n{rec.error}", file=sys.stderr)
     return 1 if result.failed else 0

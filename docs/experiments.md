@@ -15,6 +15,8 @@ quoter_fixture: 12 runs in 6.3 s (12 ran); summary results\experiments\quoter_fi
 
 Running it again lists the 12 runs as `cached`, with identical numbers, in under a second.
 
+After the runs it writes a tearsheet per run and a comparison report (`results/experiments/<name>/report.html`; P5.9, [analytics.md](analytics.md)). `--no-report` skips them.
+
 ## The file
 
 ```yaml
