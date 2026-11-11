@@ -151,3 +151,31 @@ queue.summary(run)                 # one row per strategy
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | Fill rate | 95% | 89% | 82% | 75% | 49% | 24% | 20% | 18% | 15% | 17% |
 | Median time to fill (s) | 0.26 | 0.81 | 1.78 | 2.37 | 4.73 | 6.27 | 5.84 | 7.75 | 8.06 | 8.30 |
+
+## Risk (`risk.py`, P5.8)
+
+```python
+from research.analytics import risk
+risk.summary(run, "1m", position_limit=0.01)   # one row per strategy: all of the below
+risk.ratios(run, "1m")       # Sharpe, Sortino, hit rate from the PnL per bucket
+risk.drawdown(run)           # max drawdown, its peak, trough and recovery; drawdown_series(run) for the curve
+risk.inventory(run)          # time-weighted position distribution
+risk.limits(run)             # time at the position / open-order limits, limit rejects
+risk.turnover(run)           # volume, per hour, inventory turnover, holding time
+```
+
+Everything is measured from the end of the warm-up.
+
+| Measure | Definition |
+| :--- | :--- |
+| **Sharpe / Sortino** | from the PnL of each bucket (`pnl_buckets`, default 1 minute; a shorter last bucket is left out). Mean ÷ standard deviation, and mean ÷ downside deviation (root mean square of the losses, the gains counted as 0). Annualized by √(buckets in 365 days). They are ratios of PnL, so no capital figure is needed. They mean little with few buckets (`buckets`), and they are extreme for a strategy that loses steadily |
+| **drawdown** | on the engine's mark-to-mid PnL at every sample: the largest fall from a running high; when the high and the low were; the first sample back at the high (null if never); the duration |
+| **inventory** | the exact position path from the fills, weighted by time: mean, mean absolute, standard deviation, min, max, 5 / 50 / 95% quantiles, the time flat / long / short, and the mean absolute notional at the mid |
+| **limits** | the time with \|position\| ≥ the limit (`position_limit`, else the strategy's `max_position` parameter if the config sets it; a C++ strategy's default isn't in the config); the share of samples with `limits.open_orders` open orders; the orders refused for the open-order and rate limits |
+| **turnover** | base and quote volume, quote volume per hour, inventory turnover (base volume ÷ mean \|position\|) and holding time (mean \|position\| ÷ (base volume ÷ 2 per second)) |
+
+**On real data,** passive quoter `configs/sim/example_btc.json` with its default `max_position` of 0.01 (the summary takes 1.5 s):
+- **Ratios:** the 1-minute PnL is −0.96 ± 0.52 USDT, and no minute gained. Sharpe −1,344 and Sortino −638 annualized: a strategy that loses every minute.
+- **Drawdown:** 346.18. The PnL never rose above 0, so the drawdown is the whole loss, over all 5 h 59 m.
+- **Inventory:** mean +0.0035 BTC, mean absolute 0.0063. Long 73% of the time, short 26%, flat 1%. At the ±0.01 limit 7.9% of the time; mean absolute notional 505 USDT.
+- **Turnover:** 51,604 USDT per hour; inventory turned over 611 times, a holding time of about 71 s.
