@@ -292,6 +292,7 @@ PYBIND11_MODULE(blocksprint_sim, m) {
     PYBIND11_NUMPY_DTYPE(PositionRow, ts_ns, owner, position, cash, fees, mark, pnl, fills, maker_fills, taker_fills,
                              open_orders, base_volume, quote_volume);
     PYBIND11_NUMPY_DTYPE(BboPoint, ts_ns, bid, bid_qty, ask, ask_qty);
+    PYBIND11_NUMPY_DTYPE(TradePoint, ts_ns, px, qty, side);
 
 
     // std::invalid_argument (bad config keys, unknown strategy or parameter) arrives as ValueError;
@@ -547,6 +548,22 @@ PYBIND11_MODULE(blocksprint_sim, m) {
         "The data's best bid and ask over time from a .bse file (P5.4): a structured array (ts_ns, bid, bid_qty, "
         "ask, ask_qty; 1e-8 units, 0 = no level or no valid book): the book as of from_ns, then a row per change "
         "before to_ns (0: the end). The BBO at t is the last row with ts_ns <= t; the simulator's mark is its mid.");
+
+    m.def(
+        "data_trades",
+        [](const std::string& path, uint64_t from_ns, uint64_t to_ns) {
+            std::vector<TradePoint>* rows = nullptr;
+            {
+                py::gil_scoped_release release;
+                rows = new std::vector<TradePoint>(trade_list(path, from_ns, to_ns));
+            }
+            py::capsule base(rows, [](void* p) { delete static_cast<std::vector<TradePoint>*>(p); });
+            return py::array_t<TradePoint>({static_cast<py::ssize_t>(rows->size())},
+                                           {static_cast<py::ssize_t>(sizeof(TradePoint))}, rows->data(), base);
+        },
+        py::arg("path"), py::arg("from_ns") = 0, py::arg("to_ns") = 0,
+        "The data's trades from a .bse file (P5.5): a structured array (ts_ns, px, qty in 1e-8 units, side: the "
+        "aggressor, 0 buy / 1 sell) for from_ns <= ts_ns < to_ns (0: the end).");
 
     m.def(
         "run",

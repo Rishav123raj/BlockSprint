@@ -82,4 +82,16 @@ struct BboPoint {
 // ts_ns <= t: the book after every batch up to and including t.
 std::vector<BboPoint> bbo_timeline(const std::string& path, uint64_t from_ns, uint64_t to_ns);
 
+// The data's trades (P5.5), for analytics (market VWAP): every TRADE record with from_ns <= time < to_ns (to_ns
+// 0: the end), its time as bbo_timeline's. Price and quantity in 1e-8 units; side is the aggressor's (0 buy,
+// 1 sell).
+struct TradePoint {
+    uint64_t ts_ns;
+    int64_t px, qty;
+    uint8_t side;
+    uint8_t pad_[7];
+};
+
+std::vector<TradePoint> trade_list(const std::string& path, uint64_t from_ns, uint64_t to_ns);
+
 } // namespace sim

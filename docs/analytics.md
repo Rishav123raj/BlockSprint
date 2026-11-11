@@ -51,3 +51,39 @@ In quote units, with the data's mid m(t) as the mark (as `positions.csv`'s `pnl`
 | −346.18 | −3.37 | −34.05 | 308.76 | 17,093 maker | −0.11 bps |
 
 The quoter sits at the best bid and ask, so a fill comes when the market trades through its price. The mid has usually moved against it by then, so spread capture is slightly negative. The inventory it is left with keeps losing (adverse selection). Fees at 0.1% are 90% of the loss. Per hour the picture is the same, from −46 to −81.
+
+## Transaction cost analysis (`tca.py`, P5.5)
+
+```python
+from research.analytics import tca
+tca.summary(run)            # one row per strategy
+tca.orders(run)             # one row per placement
+tca.fill_costs(run, "5s")   # per fill: effective / realized spread, price impact
+tca.slippage(run)           # per strategy and side: vs the market's VWAP and the mid's TWAP
+tca.rejects(run)            # refusals by reason
+```
+
+**Costs are positive when paid,** in basis points of the mid unless a column is in quote units. s is +1 for a buy and −1 for a sell.
+
+| Measure | Definition |
+| :--- | :--- |
+| **placement** | one version of an order: a NEW, or a REPLACE (same order ID; the old version ends `cancelled` / `replaced`) |
+| **implementation shortfall** | s × (average fill price − m(sent)) on the filled part. m(sent) is the mid when the strategy sent the order: the arrival price |
+| **opportunity cost** | s × (m(end) − m(sent)) × the unfilled quantity, at the placement's end (cancel, replace, or the run's end) |
+| **effective spread** | 2s(price − m(t)) per fill |
+| **realized spread** | 2s(price − m(t + h)): the cost once the market has moved on (h: `horizon`, default 5 s) |
+| **price impact** | 2s(m(t + h) − m(t)) = effective − realized. Negative for a maker means adverse selection |
+| **slippage** | s × (average fill price − benchmark) over the side's execution interval, from its first placement sent to its last fill. Benchmarks: the data's trade VWAP (`blocksprint_sim.data_trades`) and the mid's TWAP |
+| **fill ratio** | filled ÷ placed quantity (rejected placements excluded) |
+| **time to fill** | from a placement's arrival at the exchange to its first fill, and to its last fill when it filled completely |
+| **cancel / fill** | cancellations (by the strategy, and by replaces) per fill report |
+| **order / trade** | requests sent per fill report |
+| **rejects** | `order` for a NEW / REPLACE the exchange rejected, else the refused cancel / amend / replace, each with its reason |
+
+**On real data:**
+- **Passive quoter** (`configs/sim/example_btc.json`, 6 h, 17,093 fills; TCA takes 1.4 s):
+  - 7,924 placements; fill ratio 48%; time to first fill 2.0 s median, 12.1 s p90;
+  - effective spread +0.22 bps, realized +1.81 bps at 5 s, impact −1.59 bps (adverse selection);
+  - 4,077 cancels by replace, 0.24 cancels per fill;
+  - 13 orders rejected, 3 requests refused.
+- **TWAP buy** of 1 BTC over 50 min (Nov 10 14:00–15:00, 60 market slices): 1.4% of the market's volume; 0.71 bps better than the VWAP, 0.10 bps better than the mid's TWAP; impact +1.23 bps at 5 s.

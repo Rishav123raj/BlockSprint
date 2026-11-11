@@ -204,4 +204,29 @@ std::vector<BboPoint> bbo_timeline(const std::string& path, uint64_t from_ns, ui
     return out;
 }
 
+std::vector<TradePoint> trade_list(const std::string& path, uint64_t from_ns, uint64_t to_ns) {
+    Replayer replayer(path);
+    const int64_t tick = replayer.header().tick_size, lot = replayer.header().lot_size;
+    std::vector<TradePoint> out;
+    uint64_t data_time = 0;
+    Batch b{};
+    while (replayer.next(b)) {
+        const uint64_t ts = b.ts_local() > 0 ? static_cast<uint64_t>(b.ts_local()) : 0;
+        data_time = std::max(data_time, ts);
+        if (to_ns && data_time >= to_ns) {
+            break;
+        }
+        if (b.kind != BatchKind::TRADE || data_time < from_ns) {
+            continue;
+        }
+        TradePoint t{};
+        t.ts_ns = data_time;
+        t.px = b.begin->px * tick;
+        t.qty = b.begin->qty * lot;
+        t.side = b.begin->side;
+        out.push_back(t);
+    }
+    return out;
+}
+
 } // namespace sim

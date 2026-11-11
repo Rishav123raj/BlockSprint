@@ -1,4 +1,5 @@
-"""The market a run saw (P5.4): the data's best bid and ask at any moment, and the run's tables as floats.
+"""The market a run saw (P5.4, P5.5): the data's best bid and ask at any moment, its trades, and the run's
+tables as floats.
 
     from research.analytics.market import MarketData
     md = MarketData.for_run(run)              # replays the run's .bse file (BTCUSDT, a whole day: ~5 s)
@@ -55,17 +56,29 @@ def table(run: Any, name: str):
     return df.with_columns(casts) if casts else df
 
 
+AFTER_NS = 60_000_000_000  # how far past a run's end MarketData.for_run reads by default (markout horizons)
+
+
 @functools.lru_cache(maxsize=4)
 def _timeline(path: str, from_ns: int, to_ns: int) -> np.ndarray:
     return bs.data_bbo(path, from_ns, to_ns)
 
 
-class MarketData:
-    """The data's BBO over time. Prices and quantities as floats in quote / base units, NaN for no level."""
+@functools.lru_cache(maxsize=4)
+def _trades(path: str, from_ns: int, to_ns: int) -> np.ndarray:
+    return bs.data_trades(path, from_ns, to_ns)
 
-    def __init__(self, bbo: np.ndarray):
-        """bbo: a blocksprint_sim.data_bbo array (ts_ns, bid, bid_qty, ask, ask_qty in 1e-8 units)."""
+
+class MarketData:
+    """The data's BBO over time and its trades. Prices and quantities as floats in quote / base units, NaN for
+    no level."""
+
+    def __init__(self, bbo: np.ndarray, trades: np.ndarray | None = None):
+        """bbo: a blocksprint_sim.data_bbo array (ts_ns, bid, bid_qty, ask, ask_qty in 1e-8 units); trades: a
+        blocksprint_sim.data_trades array (ts_ns, px, qty, side), or None to read them when first needed."""
         self.bbo = bbo
+        self._trades_raw = trades
+        self._source: tuple[str, int, int] | None = None
         self.ts = bbo["ts_ns"].astype(np.int64)
         bid, ask = bbo["bid"], bbo["ask"]
         valid = (bid > 0) & (ask > 0)
@@ -75,11 +88,45 @@ class MarketData:
         self._mid = np.where(last >= 0, raw[np.maximum(last, 0)], np.nan)
 
     @classmethod
-    def for_run(cls, run: Any, path: str | Path | None = None, after_ns: int = 0) -> MarketData:
-        """The timeline over a run's window, plus after_ns past its end (for markouts). path: the .bse file,
-        if the run's (run_meta.json data.file, relative to the working directory then) has moved."""
+    def for_run(cls, run: Any, path: str | Path | None = None, after_ns: int = AFTER_NS) -> MarketData:
+        """The timeline over a run's window, plus after_ns past its end (for markouts; the data may end
+        sooner). path: the .bse file, if the run's (run_meta.json data.file, relative to the working directory
+        then) has moved. Timelines are cached, so the analytics of one run share one replay."""
         start, _, end = run_window(run)
-        return cls(_timeline(str(path or run.meta["data"]["file"]), start, end + after_ns))
+        source = (str(path or run.meta["data"]["file"]), start, end + after_ns)
+        md = cls(_timeline(*source))
+        md._source = source
+        return md
+
+    def trades(self) -> dict[str, np.ndarray]:
+        """The data's trades: ts_ns, px, qty (floats) and buy (True: the aggressor bought)."""
+        if self._trades_raw is None:
+            if self._source is None:
+                raise ValueError("MarketData: no trades given and no file to read them from")
+            self._trades_raw = _trades(*self._source)
+        t = self._trades_raw
+        return {"ts_ns": t["ts_ns"].astype(np.int64), "px": t["px"].astype(np.float64) / SCALE,
+                "qty": t["qty"].astype(np.float64) / SCALE, "buy": t["side"] == 0}
+
+    def vwap(self, from_ns: int, to_ns: int) -> tuple[float, float]:
+        """(VWAP, volume) of the data's trades with from_ns <= ts < to_ns; VWAP NaN without trades."""
+        t = self.trades()
+        lo, hi = np.searchsorted(t["ts_ns"], [from_ns, to_ns], side="left")
+        qty = t["qty"][lo:hi]
+        vol = float(qty.sum())
+        return (float((t["px"][lo:hi] * qty).sum() / vol) if vol else float("nan")), vol
+
+    def twap(self, from_ns: int, to_ns: int) -> float:
+        """The mid's time-weighted average over [from_ns, to_ns) (NaN if it has no valid mid there)."""
+        if to_ns <= from_ns:
+            return float(self.mid([from_ns])[0])
+        lo = int(np.searchsorted(self.ts, from_ns, side="right"))  # the changes inside (from_ns, to_ns)
+        hi = int(np.searchsorted(self.ts, to_ns, side="left"))
+        times = np.concatenate([[from_ns], self.ts[lo:hi], [to_ns]]).astype(np.float64)
+        values = np.concatenate([self.mid([from_ns]), self._mid[lo:hi]])
+        w = np.diff(times)
+        ok = ~np.isnan(values) & (w > 0)
+        return float((values[ok] * w[ok]).sum() / w[ok].sum()) if ok.any() else float("nan")
 
     def _index(self, ts_ns: Any, side: Side) -> np.ndarray:
         return np.searchsorted(self.ts, np.asarray(ts_ns, dtype=np.int64), side=side) - 1
