@@ -634,6 +634,26 @@ def tearsheet(run: Any, market: MarketData | None = None, every: str | None = No
     return _page(head, "".join(body))
 
 
+def card(title: str, content: str) -> str:
+    """A titled card around a chart or table (an HTML fragment)."""
+    return f'<div class="card"><h2>{_e(title)}</h2>{content}</div>'
+
+
+class Frame(str):
+    """HTML that Jupyter shows as itself (_repr_html_): display(report.frame(...))."""
+
+    def _repr_html_(self) -> str:
+        return str(self)
+
+
+def frame(content: str, height: int = 440, title: str = "chart") -> Frame:
+    """An HTML fragment (charts, cards, tables, a whole page) as a self-contained iframe, with the pages' styles and
+    hover script, for a notebook: display(report.frame(report.card("PnL", report.line_chart(...))))."""
+    page = content if content.startswith("<!doctype") else _page(title, content)
+    return Frame(f'<iframe srcdoc="{html.escape(page, quote=True)}" title="{_e(title)}" '
+                 f'style="width:100%;height:{int(height)}px;border:0"></iframe>')
+
+
 def write_tearsheet(run: Any, path: str | Path, **kw: Any) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
