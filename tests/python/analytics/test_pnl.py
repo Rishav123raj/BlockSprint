@@ -98,6 +98,30 @@ def test_hand_computed_decomposition():
     assert pnl_buckets(run, 12, market)["end_ns"].to_list() == [12, 24, 30]
 
 
+def test_hand_computed_short_round_trip():
+    # The mid: 100, 98 from t=10, 102 from t=20. Sell 2 at 100.01 (short 2), buy 3 at 97.99 (long 1); end at 30
+    market = MarketData(bbo([(0, 99.99, 100.01), (10, 97.99, 98.01), (20, 101.99, 102.01)]))
+    reports = pl.DataFrame({
+        "exchange_ns": [5, 15], "owner": ["S1", "S1"], "order_id": ["S1-1", "S1-2"], "type": ["fill", "fill"],
+        "side": ["sell", "buy"], "liquidity": ["taker", "maker"],
+        "last_px": [99.99, 97.99], "last_qty": [2.0, 3.0], "fee": [0.2, 0.0]})
+    # cash 2 x 99.99 - 3 x 97.99 = -93.99; 1 held at 102; fees 0.2
+    positions = pl.DataFrame({"ts_ns": [30], "owner": ["S1"], "position": [1.0], "mark": [102.0],
+                              "pnl": [-93.99 + 102.0 - 0.2]})
+    run = FakeRun({"window": {"start_ns": 0, "trading_ns": 0, "end_ns": 30}},
+                  {"exec_reports": reports, "positions": positions})
+    # sell 2 at 99.99 against 100: -0.02 (crossed); buy 3 at 97.99 against 98: +0.03
+    assert fills(run, market)["spread_capture"].to_list() == pytest.approx([-0.02, 0.03])
+    (d,) = decompose(run, market).to_dicts()
+    # inventory: short 2 from 100 to 98 (+4), then long 1 from 98 to 102 (+4)
+    assert d["inventory"] == pytest.approx(8.0)
+    assert (d["spread_maker"], d["spread_taker"]) == pytest.approx((0.03, -0.02))
+    assert d["pnl"] == pytest.approx(7.81) and d["residual"] == pytest.approx(0.0, abs=1e-9)
+    b = pnl_buckets(run, 10, market)
+    assert b["position"].to_list() == pytest.approx([-2.0, 1.0, 1.0])
+    assert b["inventory"].to_list() == pytest.approx([0.0, 4.0, 4.0])
+
+
 def test_market_lookup_sides_and_invalid_book():
     md = MarketData(bbo([(0, 0, 0), (10, 99.0, 101.0), (20, 0, 0), (30, 101.0, 103.0)]))
     assert np.isnan(md.mid([5])).all()

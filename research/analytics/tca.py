@@ -183,7 +183,11 @@ def slippage(run: Any, market: MarketData | None = None, placements=None):
                      "avg_px": avg, "market_vwap": vwap, "market_volume": volume, "mid_twap": twap,
                      "participation": qty / volume if volume else float("nan"),
                      "vs_vwap_bps": s * (avg - vwap) / vwap * 1e4, "vs_twap_bps": s * (avg - twap) / twap * 1e4})
-    return pl.DataFrame(rows) if rows else pl.DataFrame()
+    f64 = pl.Float64
+    return pl.DataFrame(rows, schema={"owner": pl.String, "side": pl.String, "start_ns": pl.Int64,
+                                      "end_ns": pl.Int64, "filled_qty": f64, "avg_px": f64, "market_vwap": f64,
+                                      "market_volume": f64, "mid_twap": f64, "participation": f64,
+                                      "vs_vwap_bps": f64, "vs_twap_bps": f64})
 
 
 def rejects(run: Any):

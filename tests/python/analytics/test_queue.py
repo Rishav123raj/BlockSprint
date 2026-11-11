@@ -115,6 +115,14 @@ def test_hand_computed_curves_and_summary():
         queue.fill_curve(run, "price", placements_df=p)
 
 
+def test_one_queue_size_is_one_bin():
+    # Quantile edges collapse when every placement had the same queue ahead: they still make one bin
+    run, md = hand_case()
+    p = queue.placements(run, md).filter(pl.col("ahead_qty") > 0).with_columns(pl.lit(3.0).alias("ahead_qty"))
+    c = queue.fill_curve(run, "ahead", 10, placements_df=p)
+    assert c.select("bin", "placements", "fill_rate").rows() == [("[3.0, 3.0)", 2, 0.5)]
+
+
 def test_quoter_queue_on_the_slice(tmp_path):
     res = Results.run({"dataset": str(FIXTURE), "latency_preset": "zero",
                        "strategy": {"name": "passive_quoter", "params": {"size": "0.001", "refresh_ms": 500}},

@@ -227,3 +227,17 @@ python -m research.analytics.report RUN_ID [--results results] [--out FILE]   # 
   - Faster refreshing and a larger position limit bring more fills: 1,350 to 2,286.
   - They also bring bigger losses: −33 to −51.
   - The 5 s markout is about −1.15 bps everywhere.
+
+Since P5.10, `mm_btc.yaml` sweeps the Avellaneda–Stoikov market maker's γ × k instead; its results are in [strategies.md](strategies.md).
+
+## Tests (P5.13)
+
+The analytics are tested in `tests/python/analytics/` (46 tests), in two ways:
+- **Known answers:** each module has small synthetic cases (a few fills and a hand-written book) whose results are worked out by hand in the test's comments. For example, a buy of 2 at 99.99 with the mid at 100, which moves to 101, has a 100 ms markout of +2.02. Cases cover:
+  - buys and sells, maker and taker fills, and a short position that turns long;
+  - bucket edges, horizons past the end of the data, and an invalid book;
+  - queue placements that join, improve or sit behind the best, and quantile bins that collapse to one;
+  - rejects, drawdown and recovery, and time at a position limit.
+- **Consistency on the committed one-minute slice:** the PnL split adds up to the engine's PnL, the mid matches the simulator's mark, the markouts agree with TCA, and a stored run gives the same numbers as a fresh one.
+
+A run that sends no orders gives empty tables, with their usual columns, and zero or NaN summaries, never an error. Its tearsheet still renders.

@@ -67,6 +67,7 @@
 | 2026-11-11 | P5.10 done | Python reference strategies on the `Strategy` base: `research/strategies/execution.py` `Executor` (TWAP over a duration or POV at a participation of the data's traded volume; market slices, or passive: one post-only order at the own-side best, re-priced only when the price moves or it must shrink, market catch-up past `max_behind` and at the deadline), `avellaneda_stoikov.py` `AvellanedaStoikov` (reservation price and spread of the 2008 paper with a constant horizon; q in units of size; online EWMA variance of mid changes per second; post-only, never crossing, max_position), `imbalance_taker.py` `ImbalanceTaker` (top-N imbalance, market entry over a threshold, exit after hold_ms or on reversal, cooldown). `mm_btc.yaml` now runs Avellaneda-Stoikov, gamma x k: higher gamma halves fills and the loss (-36.5 -> -15); rerun cached, pages byte-identical. Tearsheets name Python strategies and their params. 26 tests: parameters, schedules, the AS formulas and variance update, imbalance, behaviour on the slice (TWAP done by its deadline, POV within a slice of participation x volume, passive TWAP makes maker fills, AS never crosses and keeps its limit, deterministic; the taker keeps one position), run from an experiment with a tearsheet. docs/strategies.md. 153 Python tests |
 | 2026-11-11 | P5.11 done | `research/notebooks/`: `01_data_exploration` (spread by time share, mid, volume by aggressor, trade sizes, top-of-book imbalance vs the next second's move), `02_strategy_walkthrough` (a strategy written in the notebook, run with `Results.run` against the C++ quoter: PnL split, TCA, markouts, queue, risk, the tearsheet), `03_sensitivity_study` (an Experiment in code: Avellaneda-Stoikov over latency x queue model, heatmaps, the spread of answers, the comparison report). Charts are the tearsheets' (`report.frame`: a self-contained iframe that Jupyter displays directly; `report.card`); no plotting library, Jupyter not a dependency (`uv run --with jupyterlab`). Default data: the committed slice; the recorded day by changing the first cell. Saved without outputs; `test_notebooks.py` checks that and runs every code cell. Also executed in a real kernel (nbclient) and the rendered HTML checked. 157 Python tests |
 | 2026-11-11 | P5.12 done | `research/experiments/configs/sensitivity.yaml`: latency {0, 5, 20, 50 ms on every leg} x queue model {front, pro rata, power 2, back} for each reference strategy (Avellaneda-Stoikov, passive TWAP, imbalance taker), Nov 10 02:00-03:00: 48 runs in ~3.5 min (4 workers), a comparison report each; a rerun takes all 48 from the store and rewrites 51 identical pages. Experiment files can now be suites (`defaults` + `experiments`, `Experiment.load_all`, run in turn by `research.run`) and sweeps can label their values (`sweep.labels`: progress, summary, reports). Findings: the queue model moves the market maker by ~10 USDT (front: most fills, biggest loss: adverse selection) and the passive TWAP's fills by a third; latency matters less; the taker is queue-independent. Fixed: Avellaneda-Stoikov's `min_spread_ticks` kept each quote a whole tick from the mid, so with a one-tick spread it never joined the best (all fills were trade-throughs and the queue model had no effect); now the quotes are at least that far apart (regression test). Heatmaps of signed values that share a sign use one hue over their range (close values were painted alike). docs/strategies.md, docs/experiments.md. 168 Python tests |
+| 2026-11-11 | P5.13 done | Analytics tests reviewed for gaps: every module already had hand-computed synthetic cases. Added: a short position that turns long (spread, inventory and bucket PnL by hand), quantile bins that collapse to one value, and a run that sends no orders through every analytic (tables empty with their columns, summaries zero, the tearsheet renders). Fixed: `tca.slippage` and `queue.fill_curve` returned frames with no columns when empty, and `fill_curve` dropped every placement when they all had the same queue ahead. 46 analytics tests, 182 Python tests |
 
 ---
 
@@ -482,8 +483,8 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 ### Acceptance criteria
 - [x] `python -m research.run research/experiments/configs/mm_btc.yaml` produces a tearsheet; running it again hits the cache and gives identical numbers. (2026-11-11: 9 runs; the rerun takes all 9 from the store and writes byte-identical pages. Since P5.10 it runs the Avellaneda-Stoikov market maker, gamma x k.)
 - [x] A sensitivity sweep with ≥ 16 runs completes and produces a comparison report. (2026-11-11: `sensitivity.yaml`, 3 × 16 runs, a report per strategy.)
-- [ ] Analytics unit tests pass.
-- [ ] Tag `v2.0.0-p5`.
+- [x] Analytics unit tests pass. (2026-11-11: 46 in `tests/python/analytics/`, 182 Python tests in all.)
+- [x] Tag `v2.0.0-p5`. (2026-11-11)
 
 ---
 
@@ -693,7 +694,7 @@ Tick these off as phases complete.
 **Phase 5: Research Toolkit**
 - [x] P5.1 Schema  - [x] P5.2 Store  - [x] P5.3 Runner/sweep  - [x] P5.4 PnL  - [x] P5.5 TCA
 - [x] P5.6 Markouts  - [x] P5.7 Queue analytics  - [x] P5.8 Risk  - [x] P5.9 Tearsheet
-- [x] P5.10 Strategies  - [x] P5.11 Notebooks  - [x] P5.12 Sensitivity  - [ ] P5.13 Tests
+- [x] P5.10 Strategies  - [x] P5.11 Notebooks  - [x] P5.12 Sensitivity  - [x] P5.13 Tests
 
 **Phase 6: Realism Extensions**
 - [ ] P6.1 Impact  - [ ] P6.2 Rate limits  - [ ] P6.3 Regime latency  - [ ] P6.4 RiskGuard

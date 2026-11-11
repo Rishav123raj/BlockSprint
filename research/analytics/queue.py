@@ -115,6 +115,8 @@ def fill_curve(run: Any, by: str = "ahead", bins: int | Sequence[float] = 10, ma
             a = rest["ahead_qty"].to_numpy()
             if isinstance(bins, int):
                 edges = np.unique(np.quantile(a, np.linspace(0, 1, bins + 1))) if len(a) else np.array([])
+                if len(edges) == 1:  # all the same queue: one bin holding it
+                    edges = np.array([edges[0], edges[0]])
             else:
                 edges = np.asarray(sorted(bins), dtype=np.float64)
             if len(edges) >= 2:
@@ -127,9 +129,8 @@ def fill_curve(run: Any, by: str = "ahead", bins: int | Sequence[float] = 10, ma
             if empty.height:
                 frames.append(empty.with_columns(pl.lit(0.0).alias("lo"), pl.lit(0.0).alias("hi"),
                                                  pl.lit("0 (new level)").alias("bin")))
-        if not frames:
-            return pl.DataFrame()
-        keyed = pl.concat(frames, how="diagonal_relaxed")
+        keyed = pl.concat(frames, how="diagonal_relaxed") if frames else p.head(0).with_columns(
+            pl.lit(0.0).alias("lo"), pl.lit(0.0).alias("hi"), pl.lit("").alias("bin"))  # no rows: just the columns
     else:
         raise ValueError(f"by must be 'ahead' or 'ticks', not {by!r}")
     filled = pl.col("filled_qty") > _EPS
