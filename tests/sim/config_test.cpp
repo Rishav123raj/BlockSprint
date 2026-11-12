@@ -88,6 +88,7 @@ TEST_CASE("a minimal config gets the defaults; the dataset manifest gives the fi
     CHECK(rc.limits.orders_per_10s == 100);
     CHECK(rc.limits.orders_per_day == 200000);
     CHECK(rc.limits.max_open_orders == 200);
+    CHECK(rc.limits.request_weight_per_min == 6000);
     CHECK(rc.strategy_name == "passive_quoter");
     CHECK(rc.owner == "S1");
     CHECK(rc.strategy_params == json::object());
@@ -231,6 +232,7 @@ TEST_CASE("errors name the key") {
     CHECK(contains(with("fees.taker_rate=\"0.000000001\""), "fees.taker_rate"));
     CHECK(contains(with("fees.taker_rate=2"), "fees.taker_rate: a rate above 1"));
     CHECK(contains(with("limits.open_orders=-1"), "limits.open_orders"));
+    CHECK(contains(with("limits.request_weight_per_min=-1"), "limits.request_weight_per_min"));
     CHECK(contains(with("seed=1.5"), "seed"));
     CHECK(contains(with("impact.half_life_ms=-1"), "impact.half_life_ms"));
     CHECK(contains(with("latency_preset=fast"), "unknown preset 'fast'"));

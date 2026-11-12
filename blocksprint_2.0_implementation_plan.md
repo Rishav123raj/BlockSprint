@@ -70,6 +70,7 @@
 | 2026-11-11 | P5.13 done | Analytics tests reviewed for gaps: every module already had hand-computed synthetic cases. Added: a short position that turns long (spread, inventory and bucket PnL by hand), quantile bins that collapse to one value, and a run that sends no orders through every analytic (tables empty with their columns, summaries zero, the tearsheet renders). Fixed: `tca.slippage` and `queue.fill_curve` returned frames with no columns when empty, and `fill_curve` dropped every placement when they all had the same queue ahead. 46 analytics tests, 182 Python tests |
 | 2026-11-11 | Phase 3 closed | The one-day `PassiveQuoter` benchmark measured on a fully covered day for the first time: Nov 10 BTCUSDT, 34.0 M records, 100% coverage, MSVC Release on mains power: 33.1 s, so the < 30 s target is missed by ~10% (replay-only 16.3 M records/s, met). A same-session Nov 6 control (25.98 s, identical events / orders / fills) confirms the conditions match P3.18; on battery the laptop is ~1.75x slower. Accepted as a known gap; tagged `v2.0.0-p3`. docs/baseline/bench_sim.md |
 | 2026-11-11 | P6.1 done | `src/sim/impact.*` `ImpactOverlay`: `impact.half_life_ms` (tau) now accepts any value >= 0. The gateway hands each strategy request's taker trades (new, replace, amend) to the synthesizer, which records what was taken from synthetic liquidity per level; each take decays as q 2^(-dt/tau). When the data changes a level it is driven to data - outstanding (whole lots, never below 0), so the liquidity comes back gradually; a level resets when the data empties it, everything on a snapshot or gap. tau = 0 is the P3 behaviour (determinism hashes unchanged). `run_meta.json`: `simulator.impact_half_life_ms`, `synthesizer.impact_taken_qty`. 5 hand-computed synthesizer tests; `tests/python/test_impact.py`: a TWAP's cost over the mid rises with size and tau on the committed slice. Nov 10 02:00-03:00, TWAP buy 300 slices: spread cost 150 BTC 26.97 / 26.99 / 38.08 / 53.00 USDT at tau 0 / 1 / 10 / 60 s, 30 BTC 0.85 -> 1.85, 3 BTC and less unchanged. docs/simulator_architecture.md §8.3. 97 C++ tests (MSVC, GCC), 185 Python |
+| 2026-11-12 | P6.2 done | The order-count limits (100 per 10 s, 200,000 per day, 200 open) were already in the gateway from P3.10; P6.2 adds request weight: `limits.request_weight_per_min` (default 6000, fixed UTC minutes), new order / cancel / replace 1, amend 4. A request over it is refused (`rate_limit`) before anything else; new stat `weight_limited` in `run_meta.json`. `risk.limits` now counts every `rate_limit` refusal (refused replaces and cancels too, not only rejected orders). `PassiveQuoter` gets `requote_always` (replace every refresh even at the same price). The default quoter never hits a limit, even at 5 ms: it replaces only when the touch moves (about 1,000 times in the hour). With `requote_always` on Nov 10 02:00-03:00: 0 rejects at 500 ms, 92,919 (order count) at 50 ms, 333,775 order count + 333,734 weight at 5 ms. Gateway test for weight; `tests/python/test_rate_limits.py`. 98 C++ tests (MSVC, GCC), 189 Python |
 
 ---
 
@@ -507,7 +508,7 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 
 ### Acceptance criteria
 - [x] For a TWAP of increasing size, slippage rises monotonically with size and τ (a sanity test). (2026-11-11: `tests/python/test_impact.py`; on Nov 10, 150 BTC: 26.97 -> 53.00 USDT from tau 0 to 60 s)
-- [ ] Rate-limit rejects appear in the `PassiveQuoter` run when re-quote frequency is unrealistic.
+- [x] Rate-limit rejects appear in the `PassiveQuoter` run when re-quote frequency is unrealistic. (2026-11-12: `tests/python/test_rate_limits.py`; on Nov 10 02:00-03:00 with `requote_always`, 0 rejects at 500 ms, 92,919 at 50 ms, 667,509 at 5 ms)
 - [ ] Tag `v2.0.0-p6`.
 
 ---
@@ -699,7 +700,7 @@ Tick these off as phases complete.
 - [x] P5.10 Strategies  - [x] P5.11 Notebooks  - [x] P5.12 Sensitivity  - [x] P5.13 Tests
 
 **Phase 6: Realism Extensions**
-- [x] P6.1 Impact  - [ ] P6.2 Rate limits  - [ ] P6.3 Regime latency  - [ ] P6.4 RiskGuard
+- [x] P6.1 Impact  - [x] P6.2 Rate limits  - [ ] P6.3 Regime latency  - [ ] P6.4 RiskGuard
 - [ ] P6.5 Gap policies  - [ ] P6.6 Permanent impact  - [ ] P6.7 Multi-symbol  - [ ] P6.8 Tests
 
 **Phase 7: Live Parity & Calibration**

@@ -470,6 +470,7 @@ public:
 - Reports and rejects arrive after ack latency, and only then change the strategy's open orders and account. At equal times a data event is delivered before a report (event class order), so a strategy that is picked off sees the trade, then its fill.
 
 **Exchange side** (at the request's arrival time):
+- **Request weight (P6.2):** every request pays its Binance REST weight against `limits.request_weight_per_min` (default 6000, in fixed UTC minutes, like the `X-MBX-USED-WEIGHT-1M` counter): new order 1, cancel 1, cancel-replace 1, amend keep-priority 4. A request that doesn't fit is refused before anything else and charges nothing: a new order gets a `REJECTED` report (`rate_limit`), a cancel / amend / replace an `on_reject` with reason `rate_limit`. It is counted in the session's `weight_limited`. Weight is per session (one connection), not per IP.
 - **New orders and replaces** count against the session's limits: orders per 10 s (sliding window, default 100) and per day (UTC, default 200,000). An order over a limit gets a `REJECTED` report (`rate_limit`) without reaching the engine. A new order also needs a free slot: open orders per symbol (default 200), else `REJECTED` (`max_open_orders`). Both reasons are new in `ExecReason`. The gateway's own rejects carry `seq` 0.
 - A **replace** whose order is no longer open is refused (`on_reject`) and sends no new order, like Binance's cancel-replace with `STOP_ON_FAILURE`.
 - A **cancel or amend** of an order that isn't open is refused through `on_reject`, and so is an amend the engine rejects (e.g. off the tick grid). The order stays as it was.
@@ -500,7 +501,7 @@ In `src/sim/strategies/`, registered by name for `strategy.name`:
 | Name | What it does | Params (default) |
 | :--- | :--- | :--- |
 | `null` | never trades | none |
-| `passive_quoter` | joins the observed best bid and ask with one post-only quote per side, re-quoting every `refresh_ms` | `size` ("0.001"), `refresh_ms` (500), `max_position` ("0.01"), `post_only` (true) |
+| `passive_quoter` | joins the observed best bid and ask with one post-only quote per side, re-quoting every `refresh_ms` | `size` ("0.001"), `refresh_ms` (500), `max_position` ("0.01"), `post_only` (true), `requote_always` (false: replace only a quote whose price moved) |
 | `twap_taker` | buys or sells `quantity` in `slices` equal MARKET orders over `duration_ms` | `side` ("buy"), `quantity` ("0.01"), `slices` (10), `duration_ms` (600000) |
 
 **PassiveQuoter**, every refresh:
@@ -631,7 +632,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   - An override value is parsed as JSON when it is valid JSON, otherwise taken as a string (times, names, paths). `null` is taken as the string "null" (the `null` strategy).
 - **Unknown keys are errors** (`unknown key 'window.form'`), including inside latency models. Every other error names its key too.
 - **Defaults:**
-  - fees 0.1% / 0.1% (Binance regular); limits 100 per 10 s, 200,000 per day, 200 open;
+  - fees 0.1% / 0.1% (Binance regular); limits 100 per 10 s, 200,000 per day, 200 open, request weight 6000 per minute;
   - `cancel_from_back`, `data_first`, seed 0, the whole file, no warm-up;
   - owner `S1`, output `results/run` sampled every 1000 ms.
 - **What a run must name:** a `dataset`, a `strategy.name`, and latency (a preset or all three models). Optimistic zero latency is never a silent default.
@@ -820,6 +821,7 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P3.17 | Cross-platform determinism: pinned output hashes on a committed slice, run in CI on MSVC and GCC (§14) | done |
 | P3.18 | `bench_sim`; windowed L2 book; one queue read per changed level. Replay-only 16.3 M records/s; a `PassiveQuoter` day in 25 s (`docs/baseline/bench_sim.md`) | done |
 | P6.1 | Impact overlay: taker fills' consumed liquidity decays with half-life τ (§8.3) | done |
+| P6.2 | Rate limits: request weight per minute on top of the P3.10 order-count limits (§11) | done |
 
 ---
 

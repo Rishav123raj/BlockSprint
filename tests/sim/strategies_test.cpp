@@ -84,6 +84,9 @@ TEST_CASE("the reference strategies are registered with their parameters") {
     CHECK(qc.refresh_ns == 250 * kMs);
     CHECK(qc.max_position == 1000000);
     CHECK_FALSE(qc.post_only);
+    CHECK_FALSE(qc.requote_always);
+    auto qa = make_strategy("passive_quoter", json{{"requote_always", true}});
+    CHECK(dynamic_cast<PassiveQuoter&>(*qa).config().requote_always);
     auto t = make_strategy("twap_taker", json{{"side", "sell"}, {"quantity", "0.5"}, {"slices", 5}, {"duration_ms", 1000}});
     const auto& tc = dynamic_cast<TwapTaker&>(*t).config();
     CHECK(tc.side == Side::SELL);
@@ -95,7 +98,8 @@ TEST_CASE("the reference strategies are registered with their parameters") {
           "strategy.params.max_position: must be at least size");
     CHECK(error_of("passive_quoter", json{{"refresh_ms", 0}}) == "strategy.params.refresh_ms: must be > 0");
     CHECK(error_of("passive_quoter", json{{"sise", "1"}}).find("unknown parameter for 'passive_quoter' "
-                                                               "(max_position, post_only, refresh_ms, size)") !=
+                                                               "(max_position, post_only, refresh_ms, "
+                                                               "requote_always, size)") !=
           std::string::npos);
     CHECK(error_of("twap_taker", json{{"side", "hold"}}) ==
           "strategy.params.side: expected \"buy\" or \"sell\", got \"hold\"");

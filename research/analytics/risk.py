@@ -174,8 +174,9 @@ def inventory(run: Any, market: MarketData | None = None):
 def limits(run: Any, position_limit: float | None = None, market: MarketData | None = None):
     """Per strategy: position_limit (given, else the strategy's max_position parameter, else null),
     time_at_position_limit (share of time with |position| >= it), max_abs_position, open_orders_limit
-    (limits.open_orders), samples_at_open_orders_limit (share of samples), rejects_open_orders and
-    rejects_rate_limit (orders the exchange refused for those limits)."""
+    (limits.open_orders), samples_at_open_orders_limit (share of samples),
+    rejects_open_orders (orders refused for the open-order limit) and rejects_rate_limit (every request refused
+    for the order-count or request-weight limits: orders, and cancels / amends / replaces)."""
     import polars as pl
 
     from research.analytics.tca import rejects
@@ -199,15 +200,16 @@ def limits(run: Any, position_limit: float | None = None, market: MarketData | N
               if position_limit is not None and total > 0 else None)
         mine = pos.filter(pl.col("owner") == name)
         oo = mine["open_orders"].to_numpy()
-        reasons = dict(rj.filter((pl.col("owner") == name) & (pl.col("kind") == "order"))
-                       .select("reason", "count").iter_rows())
+        mine_rj = rj.filter(pl.col("owner") == name)
+        reasons = dict(mine_rj.filter(pl.col("kind") == "order").select("reason", "count").iter_rows())
+        rate = int(mine_rj.filter(pl.col("reason") == "rate_limit")["count"].sum())
         rows.append({
             "owner": name, "position_limit": position_limit, "time_at_position_limit": at,
             "max_abs_position": float(np.abs(values).max()),
             "open_orders_limit": oo_limit,
             "samples_at_open_orders_limit": float((oo >= oo_limit).mean()) if oo_limit and len(oo) else None,
             "rejects_open_orders": int(reasons.get("max_open_orders", 0)),
-            "rejects_rate_limit": int(reasons.get("rate_limit", 0)),
+            "rejects_rate_limit": rate,
         })
     return pl.DataFrame(rows, schema_overrides={"position_limit": pl.Float64, "time_at_position_limit": pl.Float64,
                                                 "open_orders_limit": pl.Int64,

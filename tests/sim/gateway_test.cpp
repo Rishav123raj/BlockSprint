@@ -278,6 +278,41 @@ TEST_CASE("orders per 10 s: the excess is rejected at the exchange, and the wind
     CHECK(h.gw->context(0).open_orders().size() == 4);
 }
 
+TEST_CASE("request weight per minute: every request type pays, the excess is refused, the next minute resets") {
+    Harness h;
+    Script s;
+    GatewayLimits limits;
+    limits.request_weight_per_min = 10;  // new 1, cancel 1, replace 1, amend 4
+    std::vector<OrderId> ids;
+    s.start = [&](Context& ctx) {
+        for (int i = 0; i < 4; ++i) ids.push_back(ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, 2 * kLot));
+        ctx.set_timer(10 * kMs);
+    };
+    s.timer = [&](Context& ctx, uint64_t id) {
+        if (id == 1) {
+            ctx.amend(ids[0], kLot);  // 4 + 4 = 8
+            ctx.cancel(ids[1]);       // 9
+            ctx.cancel(ids[2]);       // 10
+            ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, kLot);  // 11: refused
+            ctx.cancel(ids[3]);                                           // refused
+            ctx.set_timer(59990 * kMs);  // arrives in the next minute
+        } else {
+            ctx.cancel(ids[3]);
+        }
+    };
+    h.gw->add_session(s, session("S1", 1, limits));
+    h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+    h.gw->start();
+    h.run_until(61000);
+    const std::vector<std::string> expected{
+        "2 ack", "2 ack", "2 ack", "2 ack", "10 timer 1", "12 amended", "12 cancelled(user)", "12 cancelled(user)",
+        "12 rejected(rate_limit)", "12 reject cancel(rate_limit)", "60000 timer 2", "60002 cancelled(user)"};
+    CHECK(s.log == expected);
+    CHECK(h.gw->stats(0).weight_limited == 2);
+    CHECK(h.gw->stats(0).rate_limited == 0);
+    CHECK(h.gw->context(0).open_orders().size() == 1);
+}
+
 TEST_CASE("max open orders; a cancel frees a slot") {
     Harness h;
     Script s;

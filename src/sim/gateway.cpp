@@ -42,6 +42,7 @@ namespace {
 
 constexpr uint64_t kTenSeconds = 10ULL * 1000000000ULL;
 constexpr uint64_t kDay = 86400ULL * 1000000000ULL;
+constexpr uint64_t kMinute = 60ULL * 1000000000ULL;
 
 } // namespace
 
@@ -235,6 +236,24 @@ public:
     // ---- exchange side ----
     void arrive(const Request& r) {
         const uint64_t t = now();
+        if (!check_weight(r, t)) {
+            ++stats_.weight_limited;
+            const std::string text = "Too much request weight used; current limit is " +
+                                     std::to_string(cfg_.limits.request_weight_per_min) + " request weight per 1 MINUTE";
+            switch (r.type) {
+                case Request::Type::NEW: reject_order(r, ExecReason::RATE_LIMIT, text); break;
+                case Request::Type::CANCEL:
+                    reject_request(RequestReject::Request::CANCEL, r.order_id, ExecReason::RATE_LIMIT, text);
+                    break;
+                case Request::Type::AMEND:
+                    reject_request(RequestReject::Request::AMEND, r.order_id, ExecReason::RATE_LIMIT, text);
+                    break;
+                case Request::Type::REPLACE:
+                    reject_request(RequestReject::Request::REPLACE, r.order_id, ExecReason::RATE_LIMIT, text);
+                    break;
+            }
+            return;
+        }
         switch (r.type) {
             case Request::Type::NEW:
             case Request::Type::REPLACE: {
@@ -389,6 +408,26 @@ private:
         to_strategy(rep);
     }
 
+    // Charges a request's weight to the current minute; false if it doesn't fit (and then charges nothing)
+    bool check_weight(const Request& r, uint64_t t) {
+        if (!cfg_.limits.request_weight_per_min) return true;
+        if (t / kMinute != minute_) {
+            minute_ = t / kMinute;
+            weight_used_ = 0;
+        }
+        const GatewayLimits& l = cfg_.limits;
+        uint32_t w = 0;
+        switch (r.type) {
+            case Request::Type::NEW: w = l.weight_new; break;
+            case Request::Type::CANCEL: w = l.weight_cancel; break;
+            case Request::Type::AMEND: w = l.weight_amend; break;
+            case Request::Type::REPLACE: w = l.weight_replace; break;
+        }
+        if (weight_used_ + w > l.request_weight_per_min) return false;
+        weight_used_ += w;
+        return true;
+    }
+
     // Counts an order against the limits; returns the reason if it breaks one (and then doesn't count it)
     std::optional<ExecReason> check_rate(uint64_t t) {
         while (!recent_.empty() && recent_.front() + kTenSeconds <= t) {
@@ -434,6 +473,8 @@ private:
     std::deque<uint64_t> recent_;  // arrival times of orders in the last 10 s
     uint64_t day_ = 0;
     uint64_t today_ = 0;
+    uint64_t minute_ = 0;
+    uint64_t weight_used_ = 0;  // request weight charged in the current minute
     const OrderId* amending_ = nullptr;  // the order of an amend being processed
 
     SessionStats stats_;

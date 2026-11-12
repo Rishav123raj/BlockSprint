@@ -545,7 +545,7 @@ int cmd_run(const std::string& path, const std::vector<std::string>& args) {
     std::printf("orders    %llu sent, %llu cancels, %llu amends, %llu replaces; %llu rate-limited, %llu refused\n",
                 static_cast<unsigned long long>(ss.orders_sent), static_cast<unsigned long long>(ss.cancels_sent),
                 static_cast<unsigned long long>(ss.amends_sent), static_cast<unsigned long long>(ss.replaces_sent),
-                static_cast<unsigned long long>(ss.rate_limited + ss.open_limited),
+                static_cast<unsigned long long>(ss.rate_limited + ss.weight_limited + ss.open_limited),
                 static_cast<unsigned long long>(ss.request_rejects));
     std::printf("fills     %llu (%llu maker, %llu taker), volume %s %s\n", static_cast<unsigned long long>(a.fills),
                 static_cast<unsigned long long>(a.maker_fills), static_cast<unsigned long long>(a.taker_fills),

@@ -120,7 +120,7 @@ const std::map<std::string, std::set<std::string>>& schema() {
         {"queue_model", {"model", "n"}},
         {"impact", {"half_life_ms"}},
         {"fees", {"maker_rate", "taker_rate"}},
-        {"limits", {"orders_per_10s", "orders_per_day", "open_orders"}},
+        {"limits", {"orders_per_10s", "orders_per_day", "open_orders", "request_weight_per_min"}},
         {"strategy", {"name", "owner", "params"}},
         {"output", {"dir", "sample_ms"}},
     };
@@ -334,7 +334,8 @@ json default_run_config() {
         {"queue_model", {{"model", "cancel_from_back"}}},
         {"impact", {{"half_life_ms", 0}}},
         {"fees", {{"maker_rate", "0.001"}, {"taker_rate", "0.001"}}},  // Binance spot, regular tier
-        {"limits", {{"orders_per_10s", 100}, {"orders_per_day", 200000}, {"open_orders", 200}}},
+        {"limits", {{"orders_per_10s", 100}, {"orders_per_day", 200000}, {"open_orders", 200},
+                    {"request_weight_per_min", 6000}}},
         {"strategy", {{"owner", "S1"}, {"params", json::object()}}},
         {"output", {{"dir", "results/run"}, {"sample_ms", 1000}}},
     };
@@ -440,6 +441,7 @@ RunConfig resolve_run_config(const json& file, const std::vector<std::string>& o
     rc.limits.orders_per_10s = get_u32(r, "limits.orders_per_10s");
     rc.limits.orders_per_day = get_u32(r, "limits.orders_per_day");
     rc.limits.max_open_orders = get_u32(r, "limits.open_orders");
+    rc.limits.request_weight_per_min = get_u32(r, "limits.request_weight_per_min");
 
     rc.strategy_name = get_string(r, "strategy.name");
     if (rc.strategy_name.empty()) bad("strategy.name", "empty");

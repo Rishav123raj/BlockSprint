@@ -12,6 +12,7 @@ PassiveQuoter::Config PassiveQuoter::config_from(StrategyParams& p) {
     c.refresh_ns = p.millis("refresh_ms", 500);
     c.max_position = p.decimal("max_position", "0.01");
     c.post_only = p.flag("post_only", true);
+    c.requote_always = p.flag("requote_always", false);
     if (c.refresh_ns == 0) p.bad("refresh_ms", "must be > 0");
     if (c.max_position < c.size) p.bad("max_position", "must be at least size");
     return c;
@@ -64,7 +65,7 @@ void PassiveQuoter::quote_side(Context& ctx, Side side, const Price* target) {
     if (!target) return;
     if (!have) {
         ctx.send(side, c_.post_only ? OrderType::LIMIT_MAKER : OrderType::LIMIT, *target, c_.size);
-    } else if (keep_price != *target) {
+    } else if (keep_price != *target || c_.requote_always) {
         ctx.replace(keep, *target, c_.size);
     }
 }

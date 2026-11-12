@@ -352,7 +352,8 @@ json ResultRecorder::finish(const json& meta) {
             {"open_orders", gw.exchange_open_orders(s)},
             {"stats",
              {{"orders_sent", ss.orders_sent}, {"cancels_sent", ss.cancels_sent}, {"amends_sent", ss.amends_sent},
-              {"replaces_sent", ss.replaces_sent}, {"rate_limited", ss.rate_limited}, {"open_limited", ss.open_limited},
+              {"replaces_sent", ss.replaces_sent}, {"rate_limited", ss.rate_limited},
+              {"weight_limited", ss.weight_limited}, {"open_limited", ss.open_limited},
               {"request_rejects", ss.request_rejects}, {"reports", ss.reports}, {"md_batches", ss.md_batches},
               {"timers", ss.timers}, {"held_back", ss.held_back}}},
         });

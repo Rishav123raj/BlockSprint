@@ -5,8 +5,8 @@
 //   strategy side   Context calls (send / cancel / amend / replace / timers) become ORDER_ARRIVE events at
 //                   entry latency; book batches, reports and request rejections are delivered after feed /
 //                   ack latency, and only then change what the strategy knows (its book, open orders, account)
-//   exchange side   arriving requests go through Binance's limits (orders per 10 s and per day, open orders),
-//                   then into the engine. Every engine report for a strategy's order, whatever caused it (its
+//   exchange side   arriving requests go through Binance's limits (request weight per minute; orders per 10 s
+//                   and per day, open orders), then into the engine. Every engine report for a strategy's order, whatever caused it (its
 //                   own request, a data trade, another strategy), updates the exchange-side account and is
 //                   sent back through the ack channel.
 //
@@ -66,6 +66,12 @@ struct GatewayLimits {
     uint32_t orders_per_10s = 100;
     uint32_t orders_per_day = 200000;
     uint32_t max_open_orders = 200;  // per symbol
+    uint32_t request_weight_per_min = 6000;  // every request, in fixed UTC minutes
+    // Request weights (Binance spot REST): new order, cancel, cancel-replace, amend keep-priority
+    uint32_t weight_new = 1;
+    uint32_t weight_cancel = 1;
+    uint32_t weight_replace = 1;
+    uint32_t weight_amend = 4;
 };
 
 struct SessionConfig {
@@ -96,6 +102,7 @@ struct SessionStats {
     uint64_t amends_sent = 0;
     uint64_t replaces_sent = 0;
     uint64_t rate_limited = 0;    // rejected by orders per 10 s / per day
+    uint64_t weight_limited = 0;  // rejected by request weight per minute (any request type)
     uint64_t open_limited = 0;    // rejected by max open orders
     uint64_t request_rejects = 0; // cancels / amends / replaces refused
     uint64_t reports = 0;         // execution reports delivered

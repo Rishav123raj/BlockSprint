@@ -3,14 +3,17 @@
 //
 // Every refresh it looks at the book it sees and its open orders:
 //   - one quote per side at the observed best price, as post-only LIMIT_MAKER (or plain LIMIT);
-//   - a quote at another price is replaced (losing its queue place, as on Binance);
+//   - a quote at another price is replaced (losing its queue place, as on Binance); with requote_always,
+//     every quote is replaced every refresh even at the same price (a naive quoter: it runs into the
+//     gateway's rate limits at a short refresh);
 //   - a side whose next fill would take the position beyond max_position is not quoted (its quote is
 //     cancelled);
 //   - while the book is invalid (a gap) every quote is cancelled;
 //   - a quote with a request in flight is left alone until the reply comes.
 // It reacts to nothing else, so its request rate is bounded by the refresh: at most 2 requests per refresh.
 //
-// Params: size ("0.001"), refresh_ms (500), max_position ("0.01", absolute, base units), post_only (true)
+// Params: size ("0.001"), refresh_ms (500), max_position ("0.01", absolute, base units), post_only (true),
+//         requote_always (false)
 #include "strategy.hpp"
 
 #include <cstdint>
@@ -27,6 +30,7 @@ public:
         uint64_t refresh_ns = 500000000;   // 500 ms
         Quantity max_position = 1000000;   // 0.01
         bool post_only = true;
+        bool requote_always = false;
     };
 
     explicit PassiveQuoter(Config config) : c_(config) {}
