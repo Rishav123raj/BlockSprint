@@ -197,6 +197,7 @@ class Experiment(BaseModel):
     tie_break: Literal["data_first", "orders_first"] | None = None
     latency_preset: str | None = None
     latency: dict[str, Any] | None = None
+    latency_regime: dict[str, Any] | None = None
     queue_model: dict[str, Any] | None = None
     impact: dict[str, Any] | None = None
     fees: dict[str, Any] | None = None
@@ -270,7 +271,8 @@ class Experiment(BaseModel):
     def base_config(self) -> dict[str, Any]:
         """The run config before the sweep and the seed (output.dir is set per run by the runner)."""
         cfg: dict[str, Any] = {"dataset": self.dataset}
-        for key in ("symbol", "tie_break", "latency_preset", "latency", "queue_model", "impact", "fees", "limits"):
+        for key in ("symbol", "tie_break", "latency_preset", "latency", "latency_regime", "queue_model", "impact", "fees",
+                    "limits"):
             value = getattr(self, key)
             if value is not None:
                 cfg[key] = copy.deepcopy(value)

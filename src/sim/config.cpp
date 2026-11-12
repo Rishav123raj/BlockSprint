@@ -111,12 +111,13 @@ json override_patch(const std::string& text) {
 const std::map<std::string, std::set<std::string>>& schema() {
     static const std::map<std::string, std::set<std::string>> keys{
         {"", {"description", "dataset", "symbol", "window", "seed", "tie_break", "latency_preset", "latency",
-              "queue_model", "impact", "fees", "limits", "strategy", "output"}},
+              "latency_regime", "queue_model", "impact", "fees", "limits", "strategy", "output"}},
         {"window", {"from", "to", "warmup_s"}},
         {"latency", {"feed", "entry", "ack"}},
         {"latency.feed", {"model", "us", "mean_us", "sd_us", "median_us", "sigma", "file", "unit", "min_us", "max_us"}},
         {"latency.entry", {"model", "us", "mean_us", "sd_us", "median_us", "sigma", "file", "unit", "min_us", "max_us"}},
         {"latency.ack", {"model", "us", "mean_us", "sd_us", "median_us", "sigma", "file", "unit", "min_us", "max_us"}},
+        {"latency_regime", {"window_ms", "curve", "channels"}},
         {"queue_model", {"model", "n"}},
         {"impact", {"half_life_ms"}},
         {"fees", {"maker_rate", "taker_rate"}},
@@ -201,6 +202,43 @@ uint64_t get_time(const json& j, const std::string& path) {
     } catch (const std::exception& e) {
         bad(path, e.what());
     }
+}
+
+// latency_regime: {"window_ms": 1000, "curve": [[records per s, multiplier], ...], "channels": [...]}
+LatencyRegimeConfig latency_regime(const json& r) {
+    LatencyRegimeConfig c;
+    const double window_ms = get_nonneg(r, "latency_regime.window_ms");
+    c.window_ns = static_cast<uint64_t>(std::llround(window_ms * 1e6));
+    if (c.window_ns == 0) bad("latency_regime.window_ms", "must be > 0");
+    const json curve = at(r, "latency_regime.curve");
+    if (!curve.is_array()) bad("latency_regime.curve", "expected [[rate, multiplier], ...], got " + curve.dump());
+    for (const auto& p : curve) {
+        if (!p.is_array() || p.size() != 2 || !p[0].is_number() || !p[1].is_number()) {
+            bad("latency_regime.curve", "expected [rate, multiplier] pairs, got " + p.dump());
+        }
+        c.curve.emplace_back(p[0].get<double>(), p[1].get<double>());
+    }
+    const json channels = at(r, "latency_regime.channels");
+    if (!channels.is_array()) bad("latency_regime.channels", "expected a list of feed / entry / ack");
+    c.feed = c.entry = c.ack = false;
+    for (const auto& ch : channels) {
+        const std::string name = ch.is_string() ? ch.get<std::string>() : ch.dump();
+        if (name == "feed") {
+            c.feed = true;
+        } else if (name == "entry") {
+            c.entry = true;
+        } else if (name == "ack") {
+            c.ack = true;
+        } else {
+            bad("latency_regime.channels", "'" + name + "' (feed, entry, ack)");
+        }
+    }
+    try {
+        LatencyRegime check(c);
+    } catch (const std::invalid_argument& e) {
+        bad("latency_regime.curve", e.what());
+    }
+    return c;
 }
 
 // A fee rate: decimal string (exact) or number, may be negative (rebate)
@@ -333,6 +371,7 @@ json default_run_config() {
         {"tie_break", "data_first"},
         {"queue_model", {{"model", "cancel_from_back"}}},
         {"impact", {{"half_life_ms", 0}}},
+        {"latency_regime", {{"window_ms", 1000}, {"curve", json::array()}, {"channels", {"feed", "entry", "ack"}}}},
         {"fees", {{"maker_rate", "0.001"}, {"taker_rate", "0.001"}}},  // Binance spot, regular tier
         {"limits", {{"orders_per_10s", 100}, {"orders_per_day", 200000}, {"open_orders", 200},
                     {"request_weight_per_min", 6000}}},
@@ -436,6 +475,7 @@ RunConfig resolve_run_config(const json& file, const std::vector<std::string>& o
     rc.feed = latency_model(r, "latency.feed");
     rc.entry = latency_model(r, "latency.entry");
     rc.ack = latency_model(r, "latency.ack");
+    o.latency_regime = latency_regime(r);
 
     rc.fees = FeeSchedule{get_rate(r, "fees.maker_rate"), get_rate(r, "fees.taker_rate")};
     rc.limits.orders_per_10s = get_u32(r, "limits.orders_per_10s");

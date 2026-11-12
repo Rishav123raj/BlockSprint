@@ -360,6 +360,19 @@ json ResultRecorder::finish(const json& meta) {
     }
     const SynthStats& sy = sim_.synthesizer().stats();
     const SimulatorOptions& opt = sim_.options();
+    json regime = nullptr;
+    if (const LatencyRegime* lr = sim_.gateway().latency_regime()) {
+        const LatencyRegimeConfig& c = lr->config();
+        json curve = json::array();
+        for (const auto& [rate, mult] : c.curve) curve.push_back({rate, mult});
+        json channels = json::array();
+        if (c.feed) channels.push_back("feed");
+        if (c.entry) channels.push_back("entry");
+        if (c.ack) channels.push_back("ack");
+        regime = json{{"window_ms", c.window_ns / 1e6}, {"curve", curve}, {"channels", channels},
+                      {"delays_scaled", lr->samples()}, {"mean_multiplier", lr->mean_multiplier()},
+                      {"max_multiplier", lr->max_multiplier()}};
+    }
     json out{
         {"format", "bs_sim.run/1"},
         {"window",
@@ -368,7 +381,7 @@ json ResultRecorder::finish(const json& meta) {
           {"end_ns", st.end_ns}}},
         {"simulator",
          {{"seed", opt.seed}, {"queue_model", opt.queue_model}, {"impact_half_life_ms", opt.impact_half_life_ns / 1e6},
-          {"tie_break", opt.tie_break == TieBreak::DATA_FIRST ? "data_first" : "orders_first"}}},
+          {"latency_regime", regime}, {"tie_break", opt.tie_break == TieBreak::DATA_FIRST ? "data_first" : "orders_first"}}},
         {"data_header",
          {{"symbol", h.symbol}, {"tick_size", format_fixed(h.tick_size)}, {"lot_size", format_fixed(h.lot_size)},
           {"records", h.record_count}, {"first_ts_local", h.first_ts_local}, {"last_ts_local", h.last_ts_local},

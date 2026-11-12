@@ -16,6 +16,13 @@
 // (arrival = max(send + sample, previous arrival)), as on a TCP connection. Each channel draws from its
 // own Rng stream, derived from the run's seed and the channel's name, so adding draws in one place
 // (a new strategy, a different feed model) leaves every other channel's samples unchanged.
+//
+// Regime latency (P6.3): a LatencyRegime scales the delays of the channels it applies to by a multiplier
+// that depends on the market's recent message rate, so latency rises when the market is busy. The rate
+// is data records per second (changed levels and trades; snapshots don't count) over a sliding window;
+// the multiplier is piecewise linear through the configured (rate, multiplier) points and flat beyond
+// the first and last. The scaling happens after the model's draw, so it never changes a channel's
+// random samples; with no points the multiplier is exactly 1.
 #include "rng.hpp"
 
 #include <nlohmann/json.hpp>
@@ -23,12 +30,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <fstream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace sim {
@@ -244,14 +253,101 @@ inline std::unique_ptr<LatencyModel> make_latency_model(const nlohmann::json& cf
     throw std::invalid_argument("unknown latency model '" + model + "' (constant, normal, lognormal, empirical)");
 }
 
+struct LatencyRegimeConfig {
+    uint64_t window_ns = 1000000000ULL;            // 1 s
+    std::vector<std::pair<double, double>> curve;  // (records per second, multiplier); empty = off
+    bool feed = true;                              // the channels it applies to
+    bool entry = true;
+    bool ack = true;
+
+    bool enabled() const { return !curve.empty(); }
+};
+
+class LatencyRegime {
+public:
+    explicit LatencyRegime(LatencyRegimeConfig cfg) : cfg_(std::move(cfg)) {
+        if (cfg_.window_ns == 0) {
+            throw std::invalid_argument("latency regime: window must be > 0");
+        }
+        for (size_t i = 0; i < cfg_.curve.size(); ++i) {
+            const auto& [rate, mult] = cfg_.curve[i];
+            if (!(rate >= 0.0) || !(mult > 0.0) || !std::isfinite(rate) || !std::isfinite(mult)) {
+                throw std::invalid_argument("latency regime: curve points need rate >= 0 and multiplier > 0");
+            }
+            if (i > 0 && !(rate > cfg_.curve[i - 1].first)) {
+                throw std::invalid_argument("latency regime: curve rates must be strictly increasing");
+            }
+        }
+    }
+
+    // n data records at time t (non-decreasing)
+    void record(uint64_t t, uint64_t n) {
+        evict(t);
+        recent_.emplace_back(t, n);
+        in_window_ += n;
+    }
+
+    // Records per second over the window ending at t
+    double rate(uint64_t t) {
+        evict(t);
+        return static_cast<double>(in_window_) * 1e9 / static_cast<double>(cfg_.window_ns);
+    }
+
+    // The delay multiplier at t
+    double multiplier(uint64_t t) {
+        const double m = at_rate(rate(t));
+        ++samples_;
+        sum_ += m;
+        max_ = std::max(max_, m);
+        return m;
+    }
+
+    // The curve at a rate
+    double at_rate(double r) const {
+        const auto& c = cfg_.curve;
+        if (c.empty()) return 1.0;
+        if (r <= c.front().first) return c.front().second;
+        if (r >= c.back().first) return c.back().second;
+        size_t i = 1;
+        while (c[i].first < r) ++i;
+        const auto& [r0, m0] = c[i - 1];
+        const auto& [r1, m1] = c[i];
+        return m0 + (m1 - m0) * (r - r0) / (r1 - r0);
+    }
+
+    const LatencyRegimeConfig& config() const { return cfg_; }
+    uint64_t samples() const { return samples_; }  // delays scaled
+    double mean_multiplier() const { return samples_ ? sum_ / static_cast<double>(samples_) : 1.0; }
+    double max_multiplier() const { return samples_ ? max_ : 1.0; }
+
+private:
+    void evict(uint64_t t) {
+        while (!recent_.empty() && recent_.front().first + cfg_.window_ns <= t) {
+            in_window_ -= recent_.front().second;
+            recent_.pop_front();
+        }
+    }
+
+    LatencyRegimeConfig cfg_;
+    std::deque<std::pair<uint64_t, uint64_t>> recent_;  // (time, records)
+    uint64_t in_window_ = 0;
+    uint64_t samples_ = 0;
+    double sum_ = 0.0;
+    double max_ = 0.0;
+};
+
 // One direction of one connection: FIFO, never overtaking
 class LatencyChannel {
 public:
     LatencyChannel(const LatencyModel& model, Rng rng) : model_(&model), rng_(rng) {}
 
-    // When a message sent at send_ns arrives
-    uint64_t arrival(uint64_t send_ns) {
-        uint64_t t = send_ns + model_->sample_ns(rng_);
+    // When a message sent at send_ns arrives; scale multiplies the sampled delay (regime latency)
+    uint64_t arrival(uint64_t send_ns, double scale = 1.0) {
+        uint64_t d = model_->sample_ns(rng_);
+        if (scale != 1.0) {
+            d = static_cast<uint64_t>(std::floor(static_cast<double>(d) * scale + 0.5));
+        }
+        uint64_t t = send_ns + d;
         if (t < last_) {
             t = last_;  // would overtake the previous message: arrives right behind it
             ++held_back_;

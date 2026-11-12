@@ -148,9 +148,17 @@ public:
     // Called with the trades each strategy request made as the taker (new, replace, amend), at exchange
     // time, e.g. for the impact overlay (P6.1)
     void set_taker_trades(std::function<void(const std::vector<Trade>&)> fn) { taker_trades_ = std::move(fn); }
+    // Regime latency (P6.3): scales every session's delays by the market's recent message rate. Set
+    // before the first batch; a config without curve points turns it off.
+    void set_latency_regime(const LatencyRegimeConfig& config);
+    const LatencyRegime* latency_regime() const { return regime_.get(); }
 
 private:
     class Session;
+    enum class Channel { FEED, ENTRY, ACK };
+
+    void count_messages(const Batch& batch);
+    double latency_scale(Channel channel);  // the regime's multiplier now, 1 if off for the channel
 
     void on_engine_report(const ExecReport& r);
     uint64_t now() const { return engine_.clock().now_ns(); }
@@ -166,6 +174,7 @@ private:
     std::unordered_map<std::string, uint32_t> by_owner_;
     GatewayListener* listener_ = nullptr;
     std::function<void(const std::vector<Trade>&)> taker_trades_;
+    std::unique_ptr<LatencyRegime> regime_;
 };
 
 } // namespace sim

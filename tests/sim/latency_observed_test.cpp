@@ -183,6 +183,41 @@ TEST_CASE("a channel never lets a message overtake an earlier one") {
     CHECK(channel.last_arrival() == prev);
 }
 
+TEST_CASE("regime latency: the curve, the message-rate window, the scaled delay") {
+    LatencyRegimeConfig c;
+    c.curve = {{100.0, 1.0}, {200.0, 3.0}};
+    LatencyRegime regime(c);
+    CHECK(regime.at_rate(0.0) == 1.0);    // flat below the first point
+    CHECK(regime.at_rate(150.0) == 2.0);  // linear between points
+    CHECK(regime.at_rate(1e6) == 3.0);    // flat beyond the last
+
+    const uint64_t s = 1000000000ULL;
+    regime.record(0, 5);
+    regime.record(s / 2, 5);
+    CHECK(regime.rate(9 * s / 10) == 10.0);
+    CHECK(regime.rate(s) == 5.0);  // the records at 0 leave the 1 s window
+    CHECK(regime.rate(3 * s / 2) == 0.0);
+    CHECK(regime.samples() == 0);
+    CHECK(regime.multiplier(3 * s / 2) == 1.0);
+    CHECK(regime.samples() == 1);
+
+    ConstantLatency model(1000.0);
+    LatencyChannel channel(model, stream_rng(1, "entry/S1"));
+    CHECK(channel.arrival(0, 2.5) == 2500);
+    CHECK(channel.arrival(10000) == 11000);
+
+    auto bad = [](std::vector<std::pair<double, double>> curve, uint64_t window_ns = 1000000000ULL) {
+        LatencyRegimeConfig b;
+        b.curve = std::move(curve);
+        b.window_ns = window_ns;
+        CHECK_THROWS_AS(LatencyRegime{b}, std::invalid_argument);
+    };
+    bad({{100.0, 1.0}, {100.0, 2.0}});  // rates must increase
+    bad({{100.0, 0.0}});                // multiplier must be > 0
+    bad({{-1.0, 1.0}});
+    bad({{100.0, 1.0}}, 0);
+}
+
 TEST_CASE("the same seed gives the same delays (pinned against a run on each compiler)") {
     LogNormalLatency model(3e6, 0.4);
     LatencyChannel a(model, stream_rng(42, "feed/S1"));

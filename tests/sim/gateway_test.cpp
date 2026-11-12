@@ -313,6 +313,37 @@ TEST_CASE("request weight per minute: every request type pays, the excess is ref
     CHECK(h.gw->context(0).open_orders().size() == 1);
 }
 
+TEST_CASE("regime latency: delays rise with the market's message rate and fall back when it calms") {
+    Harness h;
+    LatencyRegimeConfig regime;
+    regime.curve = {{0.0, 1.0}, {10.0, 3.0}};  // 10 records in the last second: 3x
+    h.gw->set_latency_regime(regime);
+    Script s;
+    s.start = [](Context& ctx) {
+        ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, kLot);
+        ctx.set_timer(200 * kMs);
+    };
+    s.book = [&](Context& ctx, const ObservedBook&) { s.log.push_back(Script::ms(ctx) + " book"); };
+    s.timer = [](Context& ctx, uint64_t id) {
+        ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, kLot);
+        if (id == 1) ctx.set_timer(1000 * kMs);
+    };
+    h.gw->add_session(s, session("S1", 1));
+    h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});  // snapshots don't count
+    std::vector<std::tuple<uint8_t, int64_t, int64_t>> busy;
+    for (int64_t i = 0; i < 10; ++i) busy.emplace_back(BID, 9990 + i, 1);
+    h.depth(100, busy);
+    h.gw->start();
+    h.run_until(2000);
+    const std::vector<std::string> expected{"1 book",  "2 ack",       "103 book",   "200 timer 1",
+                                            "206 ack", "1200 timer 2", "1202 ack"};
+    CHECK(s.log == expected);
+    const LatencyRegime* r = h.gw->latency_regime();
+    REQUIRE(r != nullptr);
+    CHECK(r->samples() == 8);  // every delay: feed at 0 and 100, entry at 0 / 200 / 1200, three acks
+    CHECK(r->max_multiplier() == 3.0);
+}
+
 TEST_CASE("max open orders; a cancel frees a slot") {
     Harness h;
     Script s;

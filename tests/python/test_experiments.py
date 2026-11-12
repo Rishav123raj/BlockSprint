@@ -89,6 +89,14 @@ def test_a_yaml_experiment_loads_and_plans(tmp_path):
     assert PINNED["strategy"]["params"]["refresh_ms"] == 100  # the base isn't modified
 
 
+def test_latency_regime_passes_through_and_sweeps(tmp_path):
+    doc = {**PINNED, "results": str(tmp_path), "latency_regime": {"window_ms": 500},
+           "sweep": {"params": {"latency_regime.curve": [[[0, 1]], [[0, 1], [1000, 3]]]}}}
+    specs = Experiment.load(write_yaml(tmp_path, doc)).plan()
+    assert [s.config["latency_regime"] for s in specs] == [
+        {"window_ms": 500, "curve": [[0, 1]]}, {"window_ms": 500, "curve": [[0, 1], [1000, 3]]}]
+
+
 def test_random_sweep_is_reproducible_and_in_range(tmp_path):
     sweep = {"mode": "random", "samples": 6, "seed": 4,
              "params": {"strategy.params.refresh_ms": {"log_uniform": [10, 1000]},

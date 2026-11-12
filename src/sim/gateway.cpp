@@ -228,7 +228,8 @@ public:
     }
 
     void publish(const Batch& batch) {
-        gw_.queue_.push(feed_.arrival(now()), EventClass::STRATEGY_MD, SimEvent{index_, batch});
+        gw_.queue_.push(feed_.arrival(now(), gw_.latency_scale(Channel::FEED)), EventClass::STRATEGY_MD,
+                        SimEvent{index_, batch});
     }
 
     void observe(const Batch& batch) { book_.apply(batch, now()); }
@@ -361,7 +362,7 @@ private:
 
     void to_exchange(Request r) {
         r.sent_at = now();
-        const uint64_t arrive = entry_.arrival(r.sent_at);
+        const uint64_t arrive = entry_.arrival(r.sent_at, gw_.latency_scale(Channel::ENTRY));
         if (gw_.listener_) {
             gw_.listener_->on_request(index_, r, arrive);
         }
@@ -369,7 +370,7 @@ private:
     }
 
     void to_strategy(const ExecReport& r) {
-        const uint64_t deliver = ack_.arrival(now());
+        const uint64_t deliver = ack_.arrival(now(), gw_.latency_scale(Channel::ACK));
         if (gw_.listener_) {
             gw_.listener_->on_report(index_, r, deliver);
         }
@@ -383,7 +384,7 @@ private:
         rr.reason = reason;
         rr.text = std::move(text);
         rr.exchange_time = now();
-        const uint64_t deliver = ack_.arrival(now());
+        const uint64_t deliver = ack_.arrival(now(), gw_.latency_scale(Channel::ACK));
         if (gw_.listener_) {
             gw_.listener_->on_request_reject(index_, rr, deliver);
         }
@@ -517,13 +518,32 @@ void SimGateway::end() {
     }
 }
 
+void SimGateway::set_latency_regime(const LatencyRegimeConfig& config) {
+    regime_ = config.enabled() ? std::make_unique<LatencyRegime>(config) : nullptr;
+}
+
+void SimGateway::count_messages(const Batch& batch) {
+    if (regime_ && (batch.kind == BatchKind::DEPTH || batch.kind == BatchKind::TRADE)) {
+        regime_->record(now(), batch.size());
+    }
+}
+
+double SimGateway::latency_scale(Channel channel) {
+    if (!regime_) return 1.0;
+    const LatencyRegimeConfig& c = regime_->config();
+    const bool on = channel == Channel::FEED ? c.feed : channel == Channel::ENTRY ? c.entry : c.ack;
+    return on ? regime_->multiplier(now()) : 1.0;
+}
+
 void SimGateway::publish(const Batch& batch) {
+    count_messages(batch);
     for (auto& s : sessions_) {
         s->publish(batch);
     }
 }
 
 void SimGateway::observe(const Batch& batch) {
+    count_messages(batch);
     for (auto& s : sessions_) {
         s->observe(batch);
     }

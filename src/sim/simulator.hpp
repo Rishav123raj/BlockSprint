@@ -39,6 +39,7 @@ struct SimulatorOptions {
     std::string queue_model = "cancel_from_back";
     uint64_t impact_half_life_ns = 0;  // P6.1: how long a strategy's taker fills keep liquidity out (0: until
                                        // the data next changes the level)
+    LatencyRegimeConfig latency_regime{};  // P6.3: delays scaled by the market's message rate (off: no curve)
     uint64_t seed = 0;       // every random stream of the run derives from it
 };
 

@@ -37,6 +37,7 @@ Simulator::Simulator(const std::string& bse_path, SimulatorOptions options)
     so.impact_half_life_ns = options_.impact_half_life_ns;
     synth_ = std::make_unique<Synthesizer>(*engine_, *model_, queue_rng_, so);
     gateway_ = std::make_unique<SimGateway>(*engine_, queue_, h.symbol, h.tick_size, h.lot_size, options_.seed);
+    gateway_->set_latency_regime(options_.latency_regime);
     if (options_.impact_half_life_ns) {
         gateway_->set_taker_trades([this](const std::vector<Trade>& trades) { synth_->strategy_trades(trades); });
     }

@@ -411,6 +411,15 @@ Every model takes `min_us` (default 0) and `max_us`, and clamps to them.
 
 **Channels.** A `LatencyChannel` is one direction of one strategy connection (feed, entry or ack). Messages on it never overtake each other: `arrival = max(send + sample, previous arrival)`, as on a TCP connection; `held_back()` counts how often that applied. Each channel draws from its **own** `Rng` stream, `stream_rng(seed, "entry/S1")` (the name hashed with FNV-1a, mixed with the seed through SplitMix64). Adding a strategy, or changing one channel's model, then leaves every other channel's samples unchanged. Streams are pinned against an independent Python implementation, and lognormal samples are pinned identically on MSVC and GCC.
 
+**Regime latency (P6.3).** On a busy market Binance's feed and order entry slow down. `latency_regime` scales every delay drawn on the chosen channels by a multiplier that depends on the market's recent **message rate**: the data records (changed levels and trades; snapshots don't count) that reached the exchange in the last `window_ms` (default 1000), per second.
+- The multiplier is piecewise linear through the `curve` points `[[rate, multiplier], ...]` (rates strictly increasing, multipliers > 0), flat below the first point and beyond the last.
+- One meter per gateway, shared by every strategy: busyness is the exchange's, not a connection's. It also counts the fast-forwarded data, so it is warm at the window's start.
+- `channels` picks the channels it applies to (default all three).
+- The scaling follows the model's draw (`round(sample × m)`, before the no-overtaking rule), so it never shifts a channel's random samples. No curve (the default) is off, and a curve flat at 1 gives byte-identical results (tested).
+- `run_meta.json` → `simulator.latency_regime`: the settings, `delays_scaled`, `mean_multiplier`, `max_multiplier` (null when off).
+
+The rate on Nov 10 BTCUSDT, per second: median 189 records, p90 1,034, p99 2,276, max 20,040 (mean 393; 02:00-03:00 UTC was calm at 241). An example curve, until calibration (P7.6): `[[500, 1], [2000, 2], [10000, 5]]`. Over 02:00-03:00 it gave a mean multiplier of 1.12 (max 2.53); the passive quoter at home-PC latency filled 1,263 times instead of 1,344.
+
 **Measuring delays: `bs_sim latency`.** It prints `ts_local − ts_exch` per trade or depth event. On this PC on 2026-11-05 the raw values ran from −300 ms to +1300 ms (BTCUSDT): the PC's clock drifts against Binance's by more than a second over the day, so raw values are not latencies. The command therefore also measures each message against the fastest one of its window (default 60 s) and writes those values for the empirical model:
 
 | 2026-11-05 | p10 | p50 | p90 | p99 |
@@ -613,6 +622,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   "tie_break": "data_first",
   "latency": {"feed": {"model": "constant", "us": 2000}, "entry": {"model": "lognormal", "median_us": 3000, "sigma": 0.4},
               "ack": {"model": "constant", "us": 2000}},
+  "latency_regime": {"window_ms": 1000, "curve": [[500, 1], [2000, 2], [10000, 5]], "channels": ["feed", "entry", "ack"]},
   "queue_model": {"model": "cancel_from_back"},
   "impact": {"half_life_ms": 0},
   "fees": {"maker_rate": "0.001", "taker_rate": "0.001"},
@@ -822,6 +832,7 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P3.18 | `bench_sim`; windowed L2 book; one queue read per changed level. Replay-only 16.3 M records/s; a `PassiveQuoter` day in 25 s (`docs/baseline/bench_sim.md`) | done |
 | P6.1 | Impact overlay: taker fills' consumed liquidity decays with half-life τ (§8.3) | done |
 | P6.2 | Rate limits: request weight per minute on top of the P3.10 order-count limits (§11) | done |
+| P6.3 | Regime latency: delays scaled by the market's recent message rate (§10) | done |
 
 ---
 
@@ -888,6 +899,7 @@ CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable
 - **Trade-through fills:** a strategy order priced better than a historical trade is filled by it, up to the trade's quantity.
 - **`ts_local` includes this PC's network delay.** Recordings from a Tokyo VPS give more realistic timing (see [recorder_ops.md](recorder_ops.md)).
 - **Gaps:** no matching against the book during a gap; trades during gaps are informational.
+- **Regime latency is a placeholder curve:** the delay multiplier depends on the data's message rate only, through a configured curve (off by default); its shape is not yet calibrated against measured latency (P7.6).
 - **Fast-forward skips latency:** before the window's start the observed books are updated at once, so at `from` the strategy's book is current rather than one feed latency old.
 - **The run stops at `to`:** orders still open stay open (they are part of the final state), and reports in flight are dropped.
 - **One symbol per run in P3.** Multi-symbol runs (shared account, cross-symbol strategies) are an extension (§20).
@@ -897,7 +909,6 @@ CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable
 - **More symbols per run:** one replayer per file merged through the EventQueue; accounts per asset.
 - **Live mode (L-phases, [live_platform_architecture.md](live_platform_architecture.md)):** the same synthesizer fed by the WebSocket instead of the replayer turns the live mirror into the backtest's code path, which is the basis of V5.
 - **Market impact models** beyond the overlay (square-root law) for execution research.
-- **Regime latency** (latency grows with message rate).
 
 ## 21. Glossary
 
