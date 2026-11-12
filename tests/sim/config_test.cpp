@@ -108,7 +108,8 @@ TEST_CASE("precedence: defaults < preset < file < overrides; a model object nami
     cfg["latency"] = {{"ack", {{"model", "constant"}, {"us", 500}}}};
     cfg["seed"] = 1;
     cfg["fees"] = {{"maker_rate", "-0.0001"}};
-    const RunConfig rc = resolve_run_config(cfg, {"seed=7", "latency.entry.median_us=5000", "strategy.params.size=\"0.002\""});
+    const RunConfig rc = resolve_run_config(cfg, {"seed=7", "latency.entry.median_us=5000", "strategy.params.size=\"0.002\"",
+                                                  "impact.half_life_ms=2.5"});
     const json& lat = rc.resolved["latency"];
     CHECK(lat["ack"] == json{{"model", "constant"}, {"us", 500}});         // the file's model, nothing of the preset's
     CHECK(lat["entry"]["model"] == "lognormal");                           // the preset's model ...
@@ -116,6 +117,7 @@ TEST_CASE("precedence: defaults < preset < file < overrides; a model object nami
     CHECK(lat["entry"]["sigma"] == 0.3);
     CHECK(lat["feed"] == latency_preset("binance_spot_tokyo_vps")["feed"]);
     CHECK(rc.sim.seed == 7);
+    CHECK(rc.sim.impact_half_life_ns == 2500000);
     CHECK(rc.fees.maker_rate == -10000);   // a rebate
     CHECK(rc.fees.taker_rate == 100000);   // default
     CHECK(rc.strategy_params["size"] == "0.002");
@@ -230,7 +232,7 @@ TEST_CASE("errors name the key") {
     CHECK(contains(with("fees.taker_rate=2"), "fees.taker_rate: a rate above 1"));
     CHECK(contains(with("limits.open_orders=-1"), "limits.open_orders"));
     CHECK(contains(with("seed=1.5"), "seed"));
-    CHECK(contains(with("impact.half_life_ms=100"), "impact.half_life_ms"));
+    CHECK(contains(with("impact.half_life_ms=-1"), "impact.half_life_ms"));
     CHECK(contains(with("latency_preset=fast"), "unknown preset 'fast'"));
     CHECK(contains(with("latency.feed={\"model\":\"warp\"}"), "latency.feed: unknown latency model"));
     CHECK(contains(with("latency.ack={\"model\":\"constant\"}"), "latency.ack"));

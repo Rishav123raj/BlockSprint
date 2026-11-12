@@ -426,9 +426,7 @@ RunConfig resolve_run_config(const json& file, const std::vector<std::string>& o
     } catch (const std::invalid_argument& e) {
         bad("queue_model", e.what());
     }
-    if (get_nonneg(r, "impact.half_life_ms") != 0.0) {
-        bad("impact.half_life_ms", "only 0 is supported so far (a taker fill's impact lasts until the data changes the level)");
-    }
+    o.impact_half_life_ns = static_cast<uint64_t>(std::llround(get_nonneg(r, "impact.half_life_ms") * 1e6));
 
     if (!r.contains("latency")) {
         bad("latency", "missing: set latency_preset (" + std::string("zero, binance_spot_tokyo_vps, binance_spot_home_pc") +

@@ -23,8 +23,11 @@
 // (at the strategy order's price), as the real market would have; the remainder rests.
 //
 // Assumptions (architecture §19): strategy orders don't change what others do. A strategy's taker fill
-// removes synthetic liquidity until the data next changes that level (impact half-life 0). Adjacent
-// synthetic orders with no strategy order between them are merged, which no queue model can tell apart.
+// removes synthetic liquidity until the data next changes that level (impact half-life 0); with a half-life
+// tau > 0 (P6.1, ImpactOverlay) the level is driven to the data less the decaying amount taken, so the
+// liquidity comes back gradually. Adjacent synthetic orders with no strategy order between them are merged,
+// which no queue model can tell apart.
+#include "impact.hpp"
 #include "queue_models.hpp"
 #include "l2_book.hpp"
 #include "replayer.hpp"
@@ -45,6 +48,7 @@ struct SynthesizerOptions {
     int64_t lot_size = 0;   // 1e-8 units per quantity lot of the data
     std::string market_owner = "MARKET";
     std::string tape_owner = "MARKET_TAPE";
+    uint64_t impact_half_life_ns = 0;  // P6.1: 0 = a taken level is set back to the data on its next change
 };
 
 // Quantities are in 1e-8 units
@@ -69,6 +73,9 @@ struct SynthStats {
     uint64_t crossing_fills = 0;       // trades of synthetic orders with crossed strategy orders
     int64_t crossing_qty = 0;
     int64_t would_cross_qty = 0;       // synthetic quantity dropped because the data itself was crossed
+    // Impact overlay (P6.1)
+    int64_t impact_taken_qty = 0;      // synthetic liquidity strategy taker fills consumed (tau > 0 only)
+    int64_t impact_held_qty = 0;       // held back from the data when levels changed, summed over changes
 };
 
 class Synthesizer {
@@ -78,6 +85,11 @@ public:
 
     // Applies one batch at the engine's current time (the caller sets the SimClock first)
     void apply(const Batch& batch);
+
+    // The trades a strategy order made as the taker (submit, replace or amend), at the engine's current
+    // time: what it took from synthetic liquidity feeds the impact overlay. Without one, nothing to do.
+    void strategy_trades(const std::vector<Trade>& trades);
+    const ImpactOverlay& impact() const { return impact_; }
 
     // What the data says (ticks and lots), as of the last batch; empty while not synced
     const L2Book& data() const { return data_; }
@@ -112,6 +124,8 @@ private:
     // each level is read from the engine once (P3.18)
     void reconcile(bool unique);
     bool changes_unique();
+    // What a changed level is driven to: the data's quantity, less what the impact overlay still holds back
+    int64_t target_qty(const Change& c);
 
     // Reads a level's queue into slots_ / queue_; returns its synthetic quantity
     int64_t scan(Side side, Price price);
@@ -132,10 +146,12 @@ private:
     bool synced_ = false;
     uint64_t id_seq_ = 0;
     SynthStats stats_;
+    ImpactOverlay impact_;
 
     // Scratch, reused across batches
     std::vector<Change> changes_;
     std::vector<int64_t> after_decreases_;  // per change: synthetic quantity after the decreases
+    std::vector<int64_t> targets_;          // per change: target_qty, computed once
     std::vector<uint64_t> keys_;            // for changes_unique
     std::vector<QueueSlot> slots_;
     std::vector<const Order*> queue_;  // the orders behind slots_; valid until the next engine call

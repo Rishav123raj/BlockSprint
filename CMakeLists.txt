@@ -120,6 +120,7 @@ if(BLOCKSPRINT_BUILD_SIM)
         src/sim/replayer.cpp
         src/sim/reconstruct.cpp
         src/sim/synthesizer.cpp
+        src/sim/impact.cpp
         src/sim/observed_book.cpp
         src/sim/gateway.cpp
         src/sim/simulator.cpp

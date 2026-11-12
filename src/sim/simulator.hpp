@@ -37,6 +37,8 @@ struct SimulatorOptions {
     uint64_t warmup_ns = 0;  // no trading in [from, from + warmup)
     TieBreak tie_break = TieBreak::DATA_FIRST;
     std::string queue_model = "cancel_from_back";
+    uint64_t impact_half_life_ns = 0;  // P6.1: how long a strategy's taker fills keep liquidity out (0: until
+                                       // the data next changes the level)
     uint64_t seed = 0;       // every random stream of the run derives from it
 };
 

@@ -69,6 +69,7 @@
 | 2026-11-11 | P5.12 done | `research/experiments/configs/sensitivity.yaml`: latency {0, 5, 20, 50 ms on every leg} x queue model {front, pro rata, power 2, back} for each reference strategy (Avellaneda-Stoikov, passive TWAP, imbalance taker), Nov 10 02:00-03:00: 48 runs in ~3.5 min (4 workers), a comparison report each; a rerun takes all 48 from the store and rewrites 51 identical pages. Experiment files can now be suites (`defaults` + `experiments`, `Experiment.load_all`, run in turn by `research.run`) and sweeps can label their values (`sweep.labels`: progress, summary, reports). Findings: the queue model moves the market maker by ~10 USDT (front: most fills, biggest loss: adverse selection) and the passive TWAP's fills by a third; latency matters less; the taker is queue-independent. Fixed: Avellaneda-Stoikov's `min_spread_ticks` kept each quote a whole tick from the mid, so with a one-tick spread it never joined the best (all fills were trade-throughs and the queue model had no effect); now the quotes are at least that far apart (regression test). Heatmaps of signed values that share a sign use one hue over their range (close values were painted alike). docs/strategies.md, docs/experiments.md. 168 Python tests |
 | 2026-11-11 | P5.13 done | Analytics tests reviewed for gaps: every module already had hand-computed synthetic cases. Added: a short position that turns long (spread, inventory and bucket PnL by hand), quantile bins that collapse to one value, and a run that sends no orders through every analytic (tables empty with their columns, summaries zero, the tearsheet renders). Fixed: `tca.slippage` and `queue.fill_curve` returned frames with no columns when empty, and `fill_curve` dropped every placement when they all had the same queue ahead. 46 analytics tests, 182 Python tests |
 | 2026-11-11 | Phase 3 closed | The one-day `PassiveQuoter` benchmark measured on a fully covered day for the first time: Nov 10 BTCUSDT, 34.0 M records, 100% coverage, MSVC Release on mains power: 33.1 s, so the < 30 s target is missed by ~10% (replay-only 16.3 M records/s, met). A same-session Nov 6 control (25.98 s, identical events / orders / fills) confirms the conditions match P3.18; on battery the laptop is ~1.75x slower. Accepted as a known gap; tagged `v2.0.0-p3`. docs/baseline/bench_sim.md |
+| 2026-11-11 | P6.1 done | `src/sim/impact.*` `ImpactOverlay`: `impact.half_life_ms` (tau) now accepts any value >= 0. The gateway hands each strategy request's taker trades (new, replace, amend) to the synthesizer, which records what was taken from synthetic liquidity per level; each take decays as q 2^(-dt/tau). When the data changes a level it is driven to data - outstanding (whole lots, never below 0), so the liquidity comes back gradually; a level resets when the data empties it, everything on a snapshot or gap. tau = 0 is the P3 behaviour (determinism hashes unchanged). `run_meta.json`: `simulator.impact_half_life_ms`, `synthesizer.impact_taken_qty`. 5 hand-computed synthesizer tests; `tests/python/test_impact.py`: a TWAP's cost over the mid rises with size and tau on the committed slice. Nov 10 02:00-03:00, TWAP buy 300 slices: spread cost 150 BTC 26.97 / 26.99 / 38.08 / 53.00 USDT at tau 0 / 1 / 10 / 60 s, 30 BTC 0.85 -> 1.85, 3 BTC and less unchanged. docs/simulator_architecture.md §8.3. 97 C++ tests (MSVC, GCC), 185 Python |
 
 ---
 
@@ -505,7 +506,7 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 | P6.8 | Golden tests for each feature + an updated sensitivity report including τ | `tests/sim/` | 1 |
 
 ### Acceptance criteria
-- [ ] For a TWAP of increasing size, slippage rises monotonically with size and τ (a sanity test).
+- [x] For a TWAP of increasing size, slippage rises monotonically with size and τ (a sanity test). (2026-11-11: `tests/python/test_impact.py`; on Nov 10, 150 BTC: 26.97 -> 53.00 USDT from tau 0 to 60 s)
 - [ ] Rate-limit rejects appear in the `PassiveQuoter` run when re-quote frequency is unrealistic.
 - [ ] Tag `v2.0.0-p6`.
 
@@ -698,7 +699,7 @@ Tick these off as phases complete.
 - [x] P5.10 Strategies  - [x] P5.11 Notebooks  - [x] P5.12 Sensitivity  - [x] P5.13 Tests
 
 **Phase 6: Realism Extensions**
-- [ ] P6.1 Impact  - [ ] P6.2 Rate limits  - [ ] P6.3 Regime latency  - [ ] P6.4 RiskGuard
+- [x] P6.1 Impact  - [ ] P6.2 Rate limits  - [ ] P6.3 Regime latency  - [ ] P6.4 RiskGuard
 - [ ] P6.5 Gap policies  - [ ] P6.6 Permanent impact  - [ ] P6.7 Multi-symbol  - [ ] P6.8 Tests
 
 **Phase 7: Live Parity & Calibration**

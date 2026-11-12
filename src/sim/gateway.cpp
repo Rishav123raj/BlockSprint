@@ -269,10 +269,10 @@ public:
                 order->timestamp = t;
                 order->owner_id = cfg_.owner;
                 order->stp_policy = r.stp;
-                if (r.type == Request::Type::NEW) {
-                    gw_.engine_.submit_order(order);
-                } else {
-                    gw_.engine_.replace_order(order);
+                const auto trades = r.type == Request::Type::NEW ? gw_.engine_.submit_order(order)
+                                                                 : gw_.engine_.replace_order(order);
+                if (gw_.taker_trades_ && !trades.empty()) {
+                    gw_.taker_trades_(trades);
                 }
                 return;
             }
@@ -290,6 +290,9 @@ public:
                 amending_ = &r.order_id;
                 gw_.engine_.amend_order(gw_.symbol_, r.order_id, r.quantity, r.new_price, trades);
                 amending_ = nullptr;
+                if (gw_.taker_trades_ && !trades.empty()) {
+                    gw_.taker_trades_(trades);
+                }
                 return;
             }
         }

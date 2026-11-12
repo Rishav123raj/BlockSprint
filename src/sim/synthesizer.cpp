@@ -17,7 +17,8 @@ constexpr size_t kAllLevels = std::numeric_limits<size_t>::max();
 } // namespace
 
 Synthesizer::Synthesizer(MatchingEngine& engine, const QueueModel& model, Rng& rng, SynthesizerOptions options)
-    : engine_(engine), model_(model), rng_(rng), options_(std::move(options)) {
+    : engine_(engine), model_(model), rng_(rng), options_(std::move(options)),
+      impact_(options_.impact_half_life_ns, options_.lot_size > 0 ? options_.lot_size : 1) {
     if (options_.symbol.empty() || options_.tick_size <= 0 || options_.lot_size <= 0) {
         throw std::invalid_argument("Synthesizer needs a symbol and positive tick and lot sizes");
     }
@@ -43,6 +44,36 @@ void Synthesizer::apply(const Batch& batch) {
             apply_gap();
             break;
     }
+}
+
+void Synthesizer::strategy_trades(const std::vector<Trade>& trades) {
+    if (!impact_.enabled() || !synced_) {
+        return;
+    }
+    const uint64_t now = engine_.clock().now_ns();
+    for (const Trade& t : trades) {
+        if (!is_synthetic_id(t.maker_order_id) || t.price % options_.tick_size != 0) {
+            continue;  // another strategy's order, or off the data's grid
+        }
+        // The aggressor's opposite side rested: a buyer takes asks
+        const uint8_t side = t.aggressor_side == Side::BUY ? bse::ASK : bse::BID;
+        impact_.consume(side, t.price / options_.tick_size, t.quantity, now);
+        stats_.impact_taken_qty += t.quantity;
+    }
+}
+
+int64_t Synthesizer::target_qty(const Change& c) {
+    const int64_t data = data_.qty(c.side, c.px) * options_.lot_size;
+    if (!impact_.enabled() || impact_.levels() == 0) {
+        return data;
+    }
+    if (data == 0) {
+        impact_.reset(c.side, c.px);
+        return 0;
+    }
+    const int64_t held = std::min(data, impact_.outstanding(c.side, c.px, engine_.clock().now_ns()));
+    stats_.impact_held_qty += held;
+    return data - held;
 }
 
 void Synthesizer::apply_depth(const Batch& batch) {
@@ -80,6 +111,7 @@ void Synthesizer::apply_snapshot(const Batch& batch) {
         }
     }
     data_.clear();
+    impact_.clear();
     for (const bse::Record* r = batch.begin + 1; r + 1 < batch.end; ++r) {
         data_.set(r->side, r->px, r->qty);
         changes_.push_back(Change{r->side, r->px});
@@ -94,10 +126,11 @@ void Synthesizer::reconcile(bool unique) {
     // with each other; a crossing fill takes strategy orders only), so with unique levels the quantity left
     // after the decreases is what the increases start from, without reading the level again.
     after_decreases_.resize(changes_.size());
+    targets_.resize(changes_.size());
     for (size_t i = 0; i < changes_.size(); ++i) {
         const Change& c = changes_[i];
         const Price price = c.px * options_.tick_size;
-        const int64_t target = data_.qty(c.side, c.px) * options_.lot_size;
+        const int64_t target = targets_[i] = target_qty(c);
         int64_t synthetic = scan(book_side(c.side), price);
         if (synthetic > target) {
             const int64_t removed = remove_scanned(price, synthetic, synthetic - target, false);
@@ -110,7 +143,7 @@ void Synthesizer::reconcile(bool unique) {
         const Change& c = changes_[i];
         const Side side = book_side(c.side);
         const Price price = c.px * options_.tick_size;
-        const int64_t target = data_.qty(c.side, c.px) * options_.lot_size;
+        const int64_t target = targets_[i];
         const int64_t synthetic = unique ? after_decreases_[i] : scan(side, price);
         if (synthetic < target) {
             add(side, price, target - synthetic);
@@ -186,6 +219,7 @@ void Synthesizer::apply_gap() {
         }
     }
     data_.clear();
+    impact_.clear();
     synced_ = false;
 }
 

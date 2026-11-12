@@ -121,6 +121,7 @@ graph TD
 | `Replayer` | Validates the `.bse` header, iterates records, groups them into batches | `src/sim/replayer.*` | P3.4 |
 | `L2Book` / `Reconstructor` | Pure level book from the data (no engine); top-N dumps for V0 | `src/sim/l2_book.hpp`, `src/sim/reconstruct.*` | P3.5 |
 | `Synthesizer` | Turns data events into engine operations on synthetic `MARKET` orders | `src/sim/synthesizer.*` | P3.6 |
+| `ImpactOverlay` | Holds back liquidity a strategy's taker fills took, decaying with half-life τ | `src/sim/impact.*` | P6.1 |
 | `QueueModel`s | Choose which synthetic quantity an unexplained decrease removes | `src/sim/queue_models.hpp` | P3.7 |
 | `LatencyModel`s | Feed, entry and ack delays; FIFO per connection | `src/sim/latency_models.hpp` | P3.8 |
 | `ObservedBook` | The strategy's delayed L2 view | `src/sim/observed_book.*` | P3.9 |
@@ -324,7 +325,14 @@ If a depth event arrives *before* the trade it reflects, the decrease is treated
 "Your order has no impact on others' behaviour" is the documented assumption:
 - **A trade reaching a strategy order fills it:** one that is ahead in the queue at the trade price, or one at a better price (the aggressor would have hit it first). The historical trade also consumed someone else's liquidity in reality, so the same quantity is removed from the front of the synthetic queue at the trade price.
 - **Crossing fill.** A synthetic order added at a price that crosses a resting strategy order (e.g. a new data bid above the strategy's ask) trades with it at the **strategy order's price**, for at most the added quantity; the rest rests. After a gap, the resync snapshot can fill strategy orders the market moved through. Golden scenarios (d) and (g).
-- **Strategy taker orders** consume synthetic liquidity that the data keeps showing. With impact half-life 0 (the P3 default), the level is set back to the data the next time the data changes it; until then the consumed quantity stays gone. A decaying overlay (τ > 0) is an extension.
+- **Strategy taker orders** consume synthetic liquidity that the data keeps showing, because the real market never saw the fill. `impact.half_life_ms` (τ) sets how long that lasts:
+  - **τ = 0 (the default):** the level is set back to the data the next time the data changes it; until then the consumed quantity stays gone.
+  - **τ > 0 (P6.1, `src/sim/impact.*`):** the `ImpactOverlay` remembers, per level, what strategy taker fills took from synthetic liquidity. Each take q decays as q · 2^(−Δt/τ). When the data changes the level, it is driven to the data's quantity less what is still outstanding (in whole lots, never below 0), so the liquidity comes back gradually. Between data changes the level is left alone, as with τ = 0.
+  - **Resets:** a level's entry goes when the data empties the level (new orders there owe nothing to the old take); every entry goes on a snapshot or a gap.
+  - **What counts:** only liquidity a strategy took as the taker (a new order, a replace or an amend that crossed) from synthetic orders. Fills against another strategy's orders, and a strategy's resting orders being hit, don't.
+  - The strategy's observed book never shows the impact: like a live feed, it shows the market's data.
+  - `run_meta.json` records `simulator.impact_half_life_ms` and `synthesizer.impact_taken_qty`.
+  - The decay uses floating point, so runs with τ > 0 may differ between compilers in rare last-lot roundings; the pinned determinism hashes (§14) are τ = 0 runs.
 
 ### 8.4 Invariants
 
@@ -638,7 +646,8 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   The two Binance presets are placeholders until calibration (P7.6). The home PC feed is small because `ts_local` already contains this PC's network delay.
 - **Dataset:** a packed dataset directory (its `manifest.json` gives the symbol's file and SHA-256; `symbol` is required when there are several) or a `.bse` file. The header is validated, and its symbol must match `symbol`.
 - **Times:** ns, `"YYYY-MM-DD"` (midnight UTC) or `"YYYY-MM-DDTHH:MM:SS[.fffffffff]Z"`. The resolved config holds them at full ns precision, and it resolves to itself (tested), so a run's `run_meta.json` can be run again as is.
-- **Fee rates** are exact decimal strings (or numbers); negative rates are rebates. `impact.half_life_ms` accepts only 0 for now.
+- **Fee rates** are exact decimal strings (or numbers); negative rates are rebates.
+- **Impact:** `impact.half_life_ms` is τ ≥ 0 (§8.3); 0 is the default.
 - **Queue models:** a name (`"prob_power:2"`) or `{"model": "prob_power", "n": 2}`.
 
 ### 13.2 `bs_sim`
@@ -810,6 +819,7 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P3.16 | Golden scenarios end to end: `tests/sim/golden/*.golden` through the whole simulator | done |
 | P3.17 | Cross-platform determinism: pinned output hashes on a committed slice, run in CI on MSVC and GCC (§14) | done |
 | P3.18 | `bench_sim`; windowed L2 book; one queue read per changed level. Replay-only 16.3 M records/s; a `PassiveQuoter` day in 25 s (`docs/baseline/bench_sim.md`) | done |
+| P6.1 | Impact overlay: taker fills' consumed liquidity decays with half-life τ (§8.3) | done |
 
 ---
 
@@ -837,6 +847,7 @@ src/sim/
   reconstruct.hpp/.cpp    reconstruction mode: checkpoints, top-N dumps; slice (P3.17)
   queue_models.hpp        five cancel-placement models (P3.7)
   synthesizer.hpp/.cpp    L2 -> L3 into the engine; consistency checks (P3.6)
+  impact.hpp/.cpp         ImpactOverlay: taker fills' consumed liquidity, decaying with half-life tau (P6.1)
   latency_models.hpp      constant/normal/lognormal/empirical, FIFO channels, stream_rng (P3.8)
   observed_book.hpp/.cpp  the strategy's delayed L2 view (P3.9)
   strategy.hpp            Strategy, Context, Account, OpenOrder, RequestReject (P3.10)
@@ -871,7 +882,7 @@ CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable
 - **No passive impact:** strategy quotes don't change other participants' behaviour.
 - **L2 data:** queue positions inside a level are modelled, not observed (that's what the queue models are for).
 - **Depth is 100 ms aggregates:** changes within 100 ms are invisible. Netting handles the trade/depth overlap, but very short-lived liquidity is lost.
-- **Taker impact lasts until the data next changes the level** (half-life 0 in P3; §8.3).
+- **Taker impact** lasts until the data next changes the level (τ = 0, the default), or decays with half-life τ (P6.1; §8.3). It is temporary only: the mid never shifts because of a strategy's trades.
 - **Trade-through fills:** a strategy order priced better than a historical trade is filled by it, up to the trade's quantity.
 - **`ts_local` includes this PC's network delay.** Recordings from a Tokyo VPS give more realistic timing (see [recorder_ops.md](recorder_ops.md)).
 - **Gaps:** no matching against the book during a gap; trades during gaps are informational.

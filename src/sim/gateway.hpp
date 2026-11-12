@@ -138,6 +138,9 @@ public:
 
     // nullptr to remove; the listener must outlive the gateway or be removed first
     void set_listener(GatewayListener* listener) { listener_ = listener; }
+    // Called with the trades each strategy request made as the taker (new, replace, amend), at exchange
+    // time, e.g. for the impact overlay (P6.1)
+    void set_taker_trades(std::function<void(const std::vector<Trade>&)> fn) { taker_trades_ = std::move(fn); }
 
 private:
     class Session;
@@ -155,6 +158,7 @@ private:
     std::vector<std::unique_ptr<Session>> sessions_;
     std::unordered_map<std::string, uint32_t> by_owner_;
     GatewayListener* listener_ = nullptr;
+    std::function<void(const std::vector<Trade>&)> taker_trades_;
 };
 
 } // namespace sim

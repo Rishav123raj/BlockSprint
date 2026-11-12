@@ -33,9 +33,13 @@ Simulator::Simulator(const std::string& bse_path, SimulatorOptions options)
     spec.min_notional = h.min_notional;
     engine_->set_symbol_spec(spec);
     model_ = make_queue_model(options_.queue_model);
-    synth_ = std::make_unique<Synthesizer>(*engine_, *model_, queue_rng_,
-                                           SynthesizerOptions{h.symbol, h.tick_size, h.lot_size});
+    SynthesizerOptions so{h.symbol, h.tick_size, h.lot_size};
+    so.impact_half_life_ns = options_.impact_half_life_ns;
+    synth_ = std::make_unique<Synthesizer>(*engine_, *model_, queue_rng_, so);
     gateway_ = std::make_unique<SimGateway>(*engine_, queue_, h.symbol, h.tick_size, h.lot_size, options_.seed);
+    if (options_.impact_half_life_ns) {
+        gateway_->set_taker_trades([this](const std::vector<Trade>& trades) { synth_->strategy_trades(trades); });
+    }
 }
 
 void Simulator::set_sampler(uint64_t every_ns, std::function<void(uint64_t)> fn) {

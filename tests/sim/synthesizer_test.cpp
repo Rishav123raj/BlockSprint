@@ -49,7 +49,9 @@ struct Fixture {
     std::deque<std::vector<bse::Record>> batches;  // keeps the records of applied batches alive
     int order_seq = 0;
 
-    explicit Fixture(const std::string& model_spec = "cancel_from_back") : model(make_queue_model(model_spec)) {
+    // half_life_ns: the impact overlay's (P6.1); 0 = off
+    explicit Fixture(const std::string& model_spec = "cancel_from_back", uint64_t half_life_ns = 0)
+        : model(make_queue_model(model_spec)) {
         SymbolSpec spec;
         spec.symbol = kSymbol;
         spec.tick_size = kTick;
@@ -62,7 +64,9 @@ struct Fixture {
                 reports.push_back(r);
             }
         });
-        synth = std::make_unique<Synthesizer>(engine, *model, rng, SynthesizerOptions{kSymbol, kTick, kLot});
+        SynthesizerOptions so{kSymbol, kTick, kLot};
+        so.impact_half_life_ns = half_life_ns;
+        synth = std::make_unique<Synthesizer>(engine, *model, rng, so);
     }
 
     void run(BatchKind kind, std::vector<bse::Record> records) {
@@ -111,7 +115,7 @@ struct Fixture {
         o->price = px * kTick;
         o->quantity = lots * kLot;
         o->owner_id = "S1";
-        engine.submit_order(o);
+        synth->strategy_trades(engine.submit_order(o));  // as the gateway does
         return o->order_id;
     }
     std::string buy(int64_t px, int64_t lots) { return send(Side::BUY, OrderType::LIMIT, px, lots); }
@@ -567,6 +571,94 @@ TEST_CASE("with strategy orders the synthetic book never exceeds the data and th
         CHECK(f.synth->stats().crossing_qty > 0);
         CHECK(f.synth->stats().would_cross_qty == 0);
     }
+}
+
+// ---- impact overlay (P6.1). Half-life 1000 ns; the clock is the data's ts ----
+
+TEST_CASE("impact (a): taken liquidity comes back by half each half-life as the data changes the level") {
+    Fixture f("cancel_from_back", 1000);
+    f.snapshot(1, {{BID, 10000, 5}, {ASK, 10100, 10}});
+    f.send(Side::BUY, OrderType::IOC, 10100, 4);  // takes 4 of the 10 at t=1
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(6)});
+    CHECK(f.synth->stats().impact_taken_qty == 4 * kLot);
+
+    // t=1001, one half-life: 2 still held back, so the data's 10 becomes 8
+    f.depth(1001, {{ASK, 10100, 10}});
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(8)});
+    // t=2001: 1 held back
+    f.depth(2001, {{ASK, 10100, 10}});
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(9)});
+    // t=3001: 0.5 lot is below a lot: the level is back to the data and the entry is gone
+    f.depth(3001, {{ASK, 10100, 10}});
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(10)});
+    CHECK(f.synth->impact().levels() == 0);
+    CHECK(f.synth->stats().impact_held_qty == 3 * kLot);  // 2 + 1
+    f.consistent();
+}
+
+TEST_CASE("impact (b): half-life 0 sets the level back to the data at once (the P3 behaviour)") {
+    Fixture f;
+    f.snapshot(1, {{BID, 10000, 5}, {ASK, 10100, 10}});
+    f.send(Side::BUY, OrderType::IOC, 10100, 4);
+    f.depth(1001, {{ASK, 10100, 10}});
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(10)});
+    CHECK(f.synth->stats().impact_taken_qty == 0);
+    CHECK(f.synth->impact().levels() == 0);
+}
+
+TEST_CASE("impact (c): takes add up, decaying from their own times") {
+    Fixture f("cancel_from_back", 1000);
+    f.snapshot(1, {{BID, 10000, 5}, {ASK, 10100, 10}});
+    f.send(Side::BUY, OrderType::IOC, 10100, 4);   // t=1: 4
+    f.clock->set(1001);
+    f.send(Side::BUY, OrderType::IOC, 10100, 2);   // t=1001: the first is down to 2, plus 2 = 4
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(4)});
+    f.depth(1001, {{ASK, 10100, 10}});
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(6)});
+    f.depth(2001, {{ASK, 10100, 10}});              // 2 held back
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(8)});
+}
+
+TEST_CASE("impact (d): never below zero; reset when the data empties the level, on a snapshot and on a gap") {
+    Fixture f("cancel_from_back", 1000);
+    f.snapshot(1, {{BID, 10000, 5}, {ASK, 10100, 10}, {ASK, 10200, 10}});
+    f.send(Side::BUY, OrderType::IOC, 10100, 8);
+    // The data drops to 5, under the 8 held back: the level is driven to 0, not below
+    f.depth(1, {{ASK, 10100, 5}});
+    CHECK(f.queue(Side::SELL, 10100).empty());
+    f.consistent();
+    // The data empties the level, and new orders arrive there: they owe nothing to the old take
+    f.depth(2, {{ASK, 10100, 0}});
+    f.depth(3, {{ASK, 10100, 3}});
+    CHECK(f.queue(Side::SELL, 10100) == std::vector<Slot>{syn(3)});
+    CHECK(f.synth->impact().levels() == 0);
+
+    // A snapshot clears every entry
+    f.send(Side::BUY, OrderType::IOC, 10200, 6);  // 3 at 101.00, 3 at 102.00
+    CHECK(f.synth->impact().levels() == 2);
+    f.snapshot(4, {{BID, 10000, 5}, {ASK, 10100, 3}, {ASK, 10200, 10}});
+    CHECK(f.queue(Side::SELL, 10200) == std::vector<Slot>{syn(10)});
+    CHECK(f.synth->impact().levels() == 0);
+
+    // So does a gap
+    f.send(Side::BUY, OrderType::IOC, 10100, 2);
+    CHECK(f.synth->impact().levels() == 1);
+    f.gap(5);
+    CHECK(f.synth->impact().levels() == 0);
+}
+
+TEST_CASE("impact (e): only synthetic liquidity counts; the bid side too") {
+    Fixture f("cancel_from_back", 1000);
+    f.snapshot(1, {{BID, 10000, 10}, {ASK, 10100, 10}});
+    // A seller takes bids: the bid level is held back
+    f.send(Side::SELL, OrderType::IOC, 10000, 3);
+    f.depth(1, {{BID, 10000, 10}});
+    CHECK(f.queue(Side::BUY, 10000) == std::vector<Slot>{syn(7)});
+    // Trades with no synthetic maker (nothing at the price) add nothing
+    std::vector<Trade> none{Trade{"t", kSymbol, 10050 * kTick, 2 * kLot, Side::BUY, "s99", "s100", 1}};
+    f.synth->strategy_trades(none);
+    CHECK(f.synth->impact().levels() == 1);
+    CHECK(f.synth->stats().impact_taken_qty == 3 * kLot);
 }
 
 } // TEST_SUITE
