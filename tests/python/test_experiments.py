@@ -308,3 +308,19 @@ def test_the_shipped_sensitivity_suite_is_valid(tmp_path):
     labels = {(e.label("latency", s.params["latency"]), e.label("queue_model", s.params["queue_model"]))
               for e in exps[:1] for s in e.plan()}
     assert len(labels) == 16 and ("50 ms", "power 2") in labels
+
+
+def test_the_shipped_impact_sensitivity_suite_is_valid(tmp_path):
+    """configs/sensitivity_impact.yaml (P6.8): tau x latency, four experiments of 16 runs, each impact
+    setting reaching the run config"""
+    doc = yaml.safe_load((ROOT / "research" / "experiments" / "configs" / "sensitivity_impact.yaml").read_text())
+    doc["defaults"].update(dataset=str(FIXTURE), results=str(tmp_path / "results"))
+    doc["defaults"].pop("window")
+    exps = Experiment.load_all(write_yaml(tmp_path, doc))
+    assert [e.name for e in exps] == ["sensitivity_impact_mm", "sensitivity_impact_twap", "sensitivity_impact_imbalance",
+                                      "sensitivity_impact_twap_large"]
+    assert all(len(e.plan()) == 16 for e in exps)
+    taus = {s.config["impact"]["half_life_ms"] for s in exps[0].plan()}
+    assert taus == {0, 1000, 10000, 60000}
+    assert {exps[0].label("impact.half_life_ms", s.params["impact.half_life_ms"]) for s in exps[0].plan()} == {
+        "tau 0", "tau 1 s", "tau 10 s", "tau 60 s"}

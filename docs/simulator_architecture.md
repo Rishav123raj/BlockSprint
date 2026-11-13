@@ -764,6 +764,19 @@ The rules, enforced in review and by tests:
 | TWAP seller, home-PC preset, `prob_log`, seed 11 | warm-up, `orders_first`, MARKET orders | 12 |
 | quoter, Tokyo preset, `pro_rata`, seed 3 | a window inside the file (fast-forward), plain LIMIT quotes | 82 |
 
+**Phase 6 (P6.8):** one more pinned scenario per realism extension, each also checked to have done something (so a hash can't stay stable because the feature was off):
+
+| Scenario | Checks it fired | Fills |
+| :--- | :--- | :--- |
+| P6.1 impact overlay: 5 BTC TWAP buy, τ 2 s | `impact_taken_qty` > 0 | 19 |
+| P6.2 request weight 600/min, quoter re-quoting every 5 ms | weight- and rate-limited requests | 16 |
+| P6.3 regime latency, curve to 3× | `max_multiplier` > 1 | 84 |
+| P6.4 RiskGuard: position, open orders, drawdown 0.02 | refusals and the kill switch | 16 |
+| P6.6 permanent impact, 5 BTC TWAP sell | shifts, final shift below 0 | 22 |
+| P6.7 quoter on ETHUSDT with BTCUSDT merged (`*_2026-11-10_0200_30s.bse`), random latency, `prob_power:2` | both symbols' data replayed | 14 |
+
+The gap policy (P6.5) has none: no committed slice holds a data gap; the gateway tests and the Nov 10 slow test cover it. τ > 0 and the square root use floating point; MSVC and GCC (MinGW) gave identical hashes before pinning, and CI checks Linux.
+
 More checks:
 - the fixture's SHA-256 is pinned;
 - the same run twice in one process gives the same hash;

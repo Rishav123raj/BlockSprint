@@ -10,6 +10,11 @@
 // When a change is MEANT to alter results, update the pinned hashes (the failure message prints the new
 // ones) and say why in the commit. An unexplained change on one platform only is a determinism bug.
 //
+// Phase 6 (P6.8): one more pinned scenario per realism extension (impact overlay, request weight, regime
+// latency, RiskGuard, permanent impact, two symbols), each checked to have actually done something. The gap
+// policy has no scenario here: no committed slice holds a data gap (gateway tests and the Nov 10 slow test
+// cover it).
+//
 // Fixture: tests/sim/data/btcusdt_2026-11-05_0200_1m.bse, made with
 //   bs_sim slice data/packed/binance_spot_btc_eth_1105_1107/BTCUSDT.bse
 //       --from 2026-11-05T02:00:00Z --to 2026-11-05T02:01:00Z --out tests/sim/data/btcusdt_2026-11-05_0200_1m.bse
@@ -23,6 +28,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -84,9 +90,81 @@ std::vector<Scenario> scenarios() {
     };
 }
 
+// Phase 6: a scenario per extension; `fired` checks that the extension did something in the run
+struct P6Scenario {
+    const char* name;
+    json config;
+    const char* output_hash;
+    std::function<bool(const RunOutcome&)> fired;
+};
+
+const std::string kBtc30 = std::string(BLOCKSPRINT_TEST_DATA_DIR) + "/btcusdt_2026-11-10_0200_30s.bse";
+const std::string kEth30 = std::string(BLOCKSPRINT_TEST_DATA_DIR) + "/ethusdt_2026-11-10_0200_30s.bse";
+
+json quoter() {
+    return {{"name", "passive_quoter"},
+            {"params", {{"size", "0.001"}, {"refresh_ms", 100}, {"max_position", "0.005"}}}};
+}
+
+json twap(const char* side, const char* quantity) {
+    return {{"name", "twap_taker"},
+            {"params", {{"side", side}, {"quantity", quantity}, {"slices", 20}, {"duration_ms", 50000}}}};
+}
+
+const json& stats_of(const RunOutcome& r) { return r.meta["sessions"][0]["stats"]; }
+
+std::vector<P6Scenario> p6_scenarios() {
+    return {
+        {"P6.1 impact overlay: a 5 BTC TWAP buy, half-life 2 s",
+         {{"latency_preset", "binance_spot_tokyo_vps"}, {"seed", 21}, {"impact", {{"half_life_ms", 2000}}},
+          {"strategy", twap("buy", "5")}},
+         "2db74c0726d883189a2337663b32478ed92a8fba7826993e2a5a749a8896456a",
+         [](const RunOutcome& r) { return r.meta["synthesizer"]["impact_taken_qty"] != "0.0"; }},
+        {"P6.2 request weight and order rate: a quoter re-quoting every 5 ms",
+         {{"latency_preset", "binance_spot_tokyo_vps"}, {"seed", 22}, {"limits", {{"request_weight_per_min", 600}}},
+          {"strategy", {{"name", "passive_quoter"},
+                        {"params", {{"size", "0.001"}, {"refresh_ms", 5}, {"requote_always", true}}}}}},
+         "ad3d2a9cdb30aa0bc98b145d5e852030439348654f9dd958461cd355a77596ee",
+         [](const RunOutcome& r) { return stats_of(r)["weight_limited"] > 0 && stats_of(r)["rate_limited"] > 0; }},
+        {"P6.3 regime latency: lognormal legs scaled up to 3x by the message rate",
+         {{"latency_preset", "binance_spot_tokyo_vps"}, {"seed", 23},
+          {"latency_regime", {{"window_ms", 500}, {"curve", json::array({json::array({100, 1}), json::array({1000, 3})})}}},
+          {"strategy", quoter()}},
+         "7d2085c59868c83a10083f2d7bbd7ffdafac3b6f6ee67aa1a978e1586b1ef253",
+         [](const RunOutcome& r) { return r.meta["simulator"]["latency_regime"]["max_multiplier"] > 1.0; }},
+        {"P6.4 RiskGuard: position and open-order limits, a tight kill switch",
+         {{"latency_preset", "binance_spot_tokyo_vps"}, {"seed", 24},
+          {"risk", {{"max_position", "0.002"}, {"max_open_orders", 1}, {"max_drawdown", "0.02"}}},
+          {"strategy", quoter()}},
+         "f7716e79949fe977ca0a32f89f016e44849fd82cb5c7636a6830b0ed19130e76",
+         [](const RunOutcome& r) { return stats_of(r)["risk_rejects"] > 0 && stats_of(r)["risk_killed_at"] > 0; }},
+        {"P6.6 permanent impact: a 5 BTC TWAP sell moves the market down",
+         {{"latency_preset", "binance_spot_tokyo_vps"}, {"seed", 26},
+          {"impact", {{"permanent_coefficient", 1}, {"daily_volatility", 0.025}, {"daily_volume", "20000"}}},
+          {"strategy", twap("sell", "5")}},
+         "63494173c8c5a77dd93dc91940a65b3b2af4559481d8c180020b97a9be2e0a3d",
+         [](const RunOutcome& r) {
+             return r.meta["simulator"]["permanent_impact"]["shifts"] > 0 &&
+                    r.meta["simulator"]["permanent_impact"]["final_shift"].get<std::string>()[0] == '-';
+         }},
+        {"P6.7 two symbols: a quoter on ETHUSDT with BTCUSDT merged in, random latency, prob_power:2",
+         {{"dataset", json::array({kEth30, kBtc30})},
+          {"latency", {{"feed", lognormal(2000, 0.5, 300)}, {"entry", lognormal(3000, 0.3, 1000)},
+                       {"ack", lognormal(3000, 0.3, 1000)}}},
+          {"queue_model", {{"model", "prob_power"}, {"n", 2}}}, {"seed", 27},
+          {"strategy", {{"name", "passive_quoter"},
+                        {"params", {{"size", "0.01"}, {"refresh_ms", 100}, {"max_position", "0.05"}}}}}},
+         "cf47439b3136ae2aa4f819fc520972683c2524669951cdc601ffac3ad583f561",
+         [](const RunOutcome& r) {
+             return r.meta["symbols"].size() == 2 && r.meta["symbols"][1]["synthesizer"]["trades"] > 0 &&
+                    r.account.fills > 0;
+         }},
+    };
+}
+
 RunOutcome run(const json& scenario_config, const std::string& out_dir) {
     json cfg = scenario_config;
-    cfg["dataset"] = kFixture;
+    if (!cfg.contains("dataset")) cfg["dataset"] = kFixture;
     cfg["output"]["dir"] = out_dir;
     return run_simulation(resolve_run_config(cfg));
 }
@@ -168,6 +246,20 @@ TEST_CASE("each scenario's output hash is the pinned one (same on every compiler
         TempPath dir("");
         const RunOutcome r = run(s.config, dir.str());
         CHECK(r.account.fills >= s.min_fills);
+        report += std::string("\n  ") + s.name + ": " + r.output_hash + " (" + std::to_string(r.account.fills) +
+                  " fills)";
+        CHECK_MESSAGE(r.output_hash == s.output_hash, "output hash changed: " << r.output_hash);
+    }
+    MESSAGE("output hashes:" << report);
+}
+
+TEST_CASE("Phase 6: each extension's scenario does something, and its output hash is the pinned one") {
+    std::string report;
+    for (const auto& s : p6_scenarios()) {
+        CAPTURE(s.name);
+        TempPath dir("");
+        const RunOutcome r = run(s.config, dir.str());
+        CHECK(s.fired(r));
         report += std::string("\n  ") + s.name + ": " + r.output_hash + " (" + std::to_string(r.account.fills) +
                   " fills)";
         CHECK_MESSAGE(r.output_hash == s.output_hash, "output hash changed: " << r.output_hash);

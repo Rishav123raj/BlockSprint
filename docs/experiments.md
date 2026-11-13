@@ -79,6 +79,10 @@ Labels appear in the progress lines, the summary (`labels` per run, `label.*` co
 
 `research/experiments/configs/sensitivity.yaml` (P5.12) is a suite: latency × queue model for each reference strategy ([strategies.md](strategies.md)).
 
+`research/experiments/configs/sensitivity_impact.yaml` (P6.8) adds the impact half-life τ (P6.1): τ {0, 1 s, 10 s, 60 s} × latency {0, 5, 20, 50 ms}, pro rata queue, the same three strategies and a market TWAP buying 50 BTC (a slice every 10 s); 64 runs, about 4 minutes. On Nov 10 02:00–03:00:
+- **The three reference strategies don't depend on τ.** The market maker's and the passive TWAP's results are identical for every τ (they take almost no liquidity); the imbalance taker's PnL moves by under 0.001 USDT (0.001 BTC clips against a book several BTC deep). Latency still moves them as in P5.12 (the market maker −43.40 USDT at 0 ms, −36.80 at 50 ms).
+- **The 50 BTC TWAP pays more the longer τ is:** over the data mid, 0.05 USDT per BTC at τ 0 and 1 s, 0.06 at 10 s, 0.10 at 60 s (at 5 ms latency), with 423 → 484 fills as it walks thinner touches. Still small: 0.17 BTC slices against the 02:00 book. τ matters for size relative to the book, not for these strategies' clips.
+
 ## The store
 
 ```text
