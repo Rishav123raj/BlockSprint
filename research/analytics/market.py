@@ -33,8 +33,16 @@ SCALE = 100_000_000  # fixed point: 1e-8 units
 Side = Literal["left", "right"]
 
 
+def one_symbol(run: Any) -> None:
+    """The analytics measure one symbol against its data: a multi-symbol run must be narrowed first."""
+    if "symbols" in run.meta:
+        names = ", ".join(s["symbol"] for s in run.meta["symbols"])
+        raise ValueError(f"a multi-symbol run ({names}): analyse one symbol at a time, run.for_symbol(name)")
+
+
 def run_window(run: Any) -> tuple[int, int, int]:
     """(start_ns, trading_ns, end_ns) of a run: the replayed window, the end of the warm-up and the end."""
+    one_symbol(run)
     w = run.meta["window"]
     return int(w["start_ns"]), int(w["trading_ns"]), int(w["end_ns"])
 
@@ -43,6 +51,7 @@ def table(run: Any, name: str):
     """One of a run's tables as polars, with fixed-point columns as Float64 and `*_ns` columns as Int64 ns."""
     import polars as pl
 
+    one_symbol(run)
     if hasattr(run, "to_polars"):        # Results
         df = run.to_polars(name, fixed="float")
     else:                                # StoredRun or alike: Decimal columns

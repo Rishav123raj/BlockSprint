@@ -8,10 +8,7 @@
 
 namespace sim {
 
-namespace {
-
-// The strategy's mark: the observed mid, else the last trade
-std::optional<Price> mark(const ObservedBook& book) {
+std::optional<Price> RiskGuard::mark(const ObservedBook& book) {
     if (book.valid()) {
         const auto bid = book.best_bid();
         const auto ask = book.best_ask();
@@ -21,15 +18,13 @@ std::optional<Price> mark(const ObservedBook& book) {
     return std::nullopt;
 }
 
-} // namespace
-
 RiskVerdict RiskGuard::check_order(Side side, OrderType type, Price price, Quantity quantity, const Account& account,
                                    const std::map<OrderId, OpenOrder>& orders, const ObservedBook& book,
                                    const OrderId* replacing) const {
     // What else could fill on this side
     Quantity same_side = 0;
     for (const auto& [id, o] : orders) {
-        if (o.side == side && !(replacing && id == *replacing)) same_side += o.leaves;
+        if (o.side == side && o.symbol == book.symbol() && !(replacing && id == *replacing)) same_side += o.leaves;
     }
     // The position if all of it filled (positive: in the order's direction)
     const int64_t signed_pos = side == Side::BUY ? account.position : -account.position;
@@ -71,7 +66,11 @@ bool RiskGuard::update(const Account& account, const ObservedBook& book, uint64_
     if (!limits_.max_drawdown || killed()) return false;
     const auto m = mark(book);
     if (!m) return false;
-    const int64_t pnl = account.pnl(*m);
+    return update(account.pnl(*m), now);
+}
+
+bool RiskGuard::update(int64_t pnl, uint64_t now) {
+    if (!limits_.max_drawdown || killed()) return false;
     peak_ = std::max(peak_, pnl);
     max_drawdown_seen_ = std::max(max_drawdown_seen_, peak_ - pnl);
     if (peak_ - pnl >= limits_.max_drawdown) {

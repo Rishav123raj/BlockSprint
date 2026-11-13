@@ -84,7 +84,8 @@ std::shared_ptr<ResultTables> ResultRecorder::keep_tables() {
     return tables_;
 }
 
-ResultRecorder::ResultRecorder(Simulator& sim, const std::string& dir, uint64_t sample_ns) : sim_(sim), dir_(dir) {
+ResultRecorder::ResultRecorder(Simulator& sim, const std::string& dir, uint64_t sample_ns)
+    : sim_(sim), dir_(dir), multi_(sim.symbol_count() > 1), last_mark_(sim.symbol_count(), 0) {
     fs::create_directories(dir_);
     for (Output* o : {&orders_, &reports_, &rejects_, &bbo_, &positions_}) {
         o->out.open(fs::path(dir_) / o->name, std::ios::binary | std::ios::trunc);
@@ -92,13 +93,14 @@ ResultRecorder::ResultRecorder(Simulator& sim, const std::string& dir, uint64_t 
             throw std::runtime_error("recorder: cannot write " + (fs::path(dir_) / o->name).string());
         }
     }
-    orders_.out << "sent_ns,arrive_ns,owner,request,order_id,side,order_type,price,quantity,new_price,stp\n";
-    reports_.out << "exchange_ns,deliver_ns,owner,seq,order_id,type,reason,side,order_type,price,quantity,"
+    const std::string owner = multi_ ? "owner,symbol," : "owner,";
+    orders_.out << "sent_ns,arrive_ns," << owner << "request,order_id,side,order_type,price,quantity,new_price,stp\n";
+    reports_.out << "exchange_ns,deliver_ns," << owner << "seq,order_id,type,reason,side,order_type,price,quantity,"
                     "last_px,last_qty,cum_qty,leaves_qty,liquidity,fee,cum_fee\n";
-    rejects_.out << "exchange_ns,deliver_ns,owner,request,order_id,reason,text\n";
-    bbo_.out << "ts_ns,owner,data_bid,data_bid_qty,data_ask,data_ask_qty,book_bid,book_bid_qty,book_ask,book_ask_qty,"
-                "seen_bid,seen_bid_qty,seen_ask,seen_ask_qty,seen_data_ns\n";
-    positions_.out << "ts_ns,owner,position,cash,fees,mark,pnl,fills,maker_fills,taker_fills,open_orders,"
+    rejects_.out << "exchange_ns,deliver_ns," << owner << "request,order_id,reason,text\n";
+    bbo_.out << "ts_ns," << owner << "data_bid,data_bid_qty,data_ask,data_ask_qty,book_bid,book_bid_qty,book_ask,"
+                "book_ask_qty,seen_bid,seen_bid_qty,seen_ask,seen_ask_qty,seen_data_ns\n";
+    positions_.out << "ts_ns," << owner << "position,cash,fees,mark,pnl,fills,maker_fills,taker_fills,open_orders,"
                       "base_volume,quote_volume\n";
     sim_.gateway().set_listener(this);
     if (sample_ns > 0) {
@@ -115,7 +117,8 @@ ResultRecorder::~ResultRecorder() {
 
 void ResultRecorder::on_request(uint32_t session, const Request& r, uint64_t arrive_at) {
     auto& o = row(orders_);
-    o << r.sent_at << ',' << arrive_at << ',' << sim_.gateway().owner(session) << ',' << request_type_name(r.type)
+    o << r.sent_at << ',' << arrive_at << ',' << sim_.gateway().owner(session) << symbol_col(r.symbol) << ','
+      << request_type_name(r.type)
       << ',' << r.order_id << ',';
     switch (r.type) {
         case Request::Type::NEW:
@@ -137,6 +140,7 @@ void ResultRecorder::on_request(uint32_t session, const Request& r, uint64_t arr
         t.owner = session;
         t.order = tables_->order_index(r.order_id);
         t.request = static_cast<uint8_t>(r.type);
+        t.symbol = static_cast<uint8_t>(r.symbol);
         if (r.type == Request::Type::NEW || r.type == Request::Type::REPLACE) {
             t.side = static_cast<uint8_t>(r.side);
             t.order_type = static_cast<uint8_t>(r.order_type);
@@ -155,8 +159,10 @@ void ResultRecorder::on_request(uint32_t session, const Request& r, uint64_t arr
 }
 
 void ResultRecorder::on_report(uint32_t session, const ExecReport& r, uint64_t deliver_at) {
+    const uint32_t sym = multi_ ? sim_.gateway().symbol_index(r.symbol) : 0;
     auto& o = row(reports_);
-    o << r.timestamp << ',' << deliver_at << ',' << sim_.gateway().owner(session) << ',' << r.seq << ','
+    o << r.timestamp << ',' << deliver_at << ',' << sim_.gateway().owner(session) << symbol_col(sym) << ',' << r.seq
+      << ','
       << r.order_id << ',' << execTypeToString(r.type) << ','
       << (r.reason != ExecReason::NONE ? execReasonToString(r.reason) : std::string()) << ','
       << sideToString(r.side) << ',' << orderTypeToString(r.order_type) << ',' << px(r.price) << ','
@@ -177,6 +183,7 @@ void ResultRecorder::on_report(uint32_t session, const ExecReport& r, uint64_t d
         t.owner = session;
         t.order = tables_->order_index(r.order_id);
         t.type = static_cast<uint8_t>(r.type);
+        t.symbol = static_cast<uint8_t>(sym);
         t.reason = static_cast<uint8_t>(r.reason);
         t.side = static_cast<uint8_t>(r.side);
         t.order_type = static_cast<uint8_t>(r.order_type);
@@ -196,118 +203,131 @@ void ResultRecorder::on_report(uint32_t session, const ExecReport& r, uint64_t d
 }
 
 void ResultRecorder::on_request_reject(uint32_t session, const RequestReject& r, uint64_t deliver_at) {
-    row(rejects_) << r.exchange_time << ',' << deliver_at << ',' << sim_.gateway().owner(session) << ','
+    const uint32_t sym = multi_ ? sim_.gateway().symbol_index(r.symbol) : 0;
+    row(rejects_) << r.exchange_time << ',' << deliver_at << ',' << sim_.gateway().owner(session) << symbol_col(sym)
+                  << ','
                   << request_name(r.request) << ',' << r.order_id << ','
                   << (r.reason != ExecReason::NONE ? execReasonToString(r.reason) : std::string()) << ','
                   << quoted(r.text) << '\n';
     if (tables_) {
         tables_->rejects.push_back(RejectRow{r.exchange_time, deliver_at, session, tables_->order_index(r.order_id),
-                                             static_cast<uint8_t>(r.request), static_cast<uint8_t>(r.reason), {}});
+                                             static_cast<uint8_t>(r.request), static_cast<uint8_t>(r.reason),
+                                             static_cast<uint8_t>(sym), {}});
         tables_->reject_texts.push_back(r.text);
     }
 }
 
-Price ResultRecorder::mark() {
-    const Synthesizer& synth = sim_.synthesizer();
-    const auto& h = sim_.header();
+std::string ResultRecorder::symbol_col(size_t symbol) const {
+    return multi_ ? "," + sim_.header(symbol).symbol : std::string();
+}
+
+Price ResultRecorder::mark(size_t symbol) {
+    const Synthesizer& synth = sim_.synthesizer(symbol);
+    const auto& h = sim_.header(symbol);
     std::vector<Level> bid, ask;
     synth.data().top(0, 1, bid);
     synth.data().top(1, 1, ask);
     if (synth.synced() && !bid.empty() && !ask.empty()) {
-        last_mark_ = (bid[0].px + ask[0].px) * h.tick_size / 2;
-        return last_mark_;
+        last_mark_[symbol] = (bid[0].px + ask[0].px) * h.tick_size / 2;
+        return last_mark_[symbol];
     }
     const Depth d = sim_.engine().depth(h.symbol, 1);
     if (!d.bids.empty() && !d.asks.empty()) {
-        last_mark_ = (d.bids[0].price + d.asks[0].price) / 2;
+        last_mark_[symbol] = (d.bids[0].price + d.asks[0].price) / 2;
     }
-    return last_mark_;
+    return last_mark_[symbol];
 }
 
 void ResultRecorder::sample(uint64_t t) {
-    const auto& h = sim_.header();
-    const Synthesizer& synth = sim_.synthesizer();
-    std::vector<Level> bid, ask;
-    if (synth.synced()) {
-        synth.data().top(0, 1, bid);
-        synth.data().top(1, 1, ask);
-    }
-    std::string data_cols;
-    data_cols += bid.empty() ? "," : px(bid[0].px * h.tick_size) + ',' + px(bid[0].qty * h.lot_size);
-    data_cols += ',';
-    data_cols += ask.empty() ? "," : px(ask[0].px * h.tick_size) + ',' + px(ask[0].qty * h.lot_size);
-    const Depth d = sim_.engine().depth(h.symbol, 1);
-    std::string book_cols;
-    book_cols += d.bids.empty() ? "," : px(d.bids[0].price) + ',' + px(d.bids[0].quantity);
-    book_cols += ',';
-    book_cols += d.asks.empty() ? "," : px(d.asks[0].price) + ',' + px(d.asks[0].quantity);
-
-    BboRow base{};
-    base.ts_ns = t;
-    if (!bid.empty()) {
-        base.data_bid = bid[0].px * h.tick_size;
-        base.data_bid_qty = bid[0].qty * h.lot_size;
-    }
-    if (!ask.empty()) {
-        base.data_ask = ask[0].px * h.tick_size;
-        base.data_ask_qty = ask[0].qty * h.lot_size;
-    }
-    if (!d.bids.empty()) {
-        base.book_bid = d.bids[0].price;
-        base.book_bid_qty = d.bids[0].quantity;
-    }
-    if (!d.asks.empty()) {
-        base.book_ask = d.asks[0].price;
-        base.book_ask_qty = d.asks[0].quantity;
-    }
-
     SimGateway& gw = sim_.gateway();
-    for (uint32_t s = 0; s < gw.session_count(); ++s) {
-        const ObservedBook& seen = gw.context(s).book();
-        const auto sb = seen.valid() ? seen.best_bid() : std::nullopt;
-        const auto sa = seen.valid() ? seen.best_ask() : std::nullopt;
-        row(bbo_) << t << ',' << gw.owner(s) << ',' << data_cols << ',' << book_cols << ','
-                  << (sb ? px(sb->price) + ',' + px(sb->qty) : std::string(",")) << ','
-                  << (sa ? px(sa->price) + ',' + px(sa->qty) : std::string(",")) << ','
-                  << (seen.batches() ? std::to_string(seen.data_time()) : std::string()) << '\n';
-        if (tables_) {
-            BboRow r = base;
-            r.owner = s;
-            if (sb) {
-                r.seen_bid = sb->price;
-                r.seen_bid_qty = sb->qty;
-            }
-            if (sa) {
-                r.seen_ask = sa->price;
-                r.seen_ask_qty = sa->qty;
-            }
-            r.seen_data_ns = seen.batches() ? seen.data_time() : 0;
-            tables_->bbo.push_back(r);
+    for (size_t sym = 0; sym < sim_.symbol_count(); ++sym) {
+        const auto& h = sim_.header(sym);
+        const Synthesizer& synth = sim_.synthesizer(sym);
+        std::vector<Level> bid, ask;
+        if (synth.synced()) {
+            synth.data().top(0, 1, bid);
+            synth.data().top(1, 1, ask);
         }
-    }
-    if (gw.session_count() == 0) {
-        row(bbo_) << t << ',' << ',' << data_cols << ',' << book_cols << ",,,,,\n";
-        if (tables_) {
-            base.owner = ResultTables::kNoOwner;
-            tables_->bbo.push_back(base);
+        std::string data_cols;
+        data_cols += bid.empty() ? "," : px(bid[0].px * h.tick_size) + ',' + px(bid[0].qty * h.lot_size);
+        data_cols += ',';
+        data_cols += ask.empty() ? "," : px(ask[0].px * h.tick_size) + ',' + px(ask[0].qty * h.lot_size);
+        const Depth d = sim_.engine().depth(h.symbol, 1);
+        std::string book_cols;
+        book_cols += d.bids.empty() ? "," : px(d.bids[0].price) + ',' + px(d.bids[0].quantity);
+        book_cols += ',';
+        book_cols += d.asks.empty() ? "," : px(d.asks[0].price) + ',' + px(d.asks[0].quantity);
+
+        BboRow base{};
+        base.ts_ns = t;
+        base.symbol = static_cast<uint32_t>(sym);
+        if (!bid.empty()) {
+            base.data_bid = bid[0].px * h.tick_size;
+            base.data_bid_qty = bid[0].qty * h.lot_size;
+        }
+        if (!ask.empty()) {
+            base.data_ask = ask[0].px * h.tick_size;
+            base.data_ask_qty = ask[0].qty * h.lot_size;
+        }
+        if (!d.bids.empty()) {
+            base.book_bid = d.bids[0].price;
+            base.book_bid_qty = d.bids[0].quantity;
+        }
+        if (!d.asks.empty()) {
+            base.book_ask = d.asks[0].price;
+            base.book_ask_qty = d.asks[0].quantity;
+        }
+
+        for (uint32_t s = 0; s < gw.session_count(); ++s) {
+            const ObservedBook& seen = gw.context(s).book(h.symbol);
+            const auto sb = seen.valid() ? seen.best_bid() : std::nullopt;
+            const auto sa = seen.valid() ? seen.best_ask() : std::nullopt;
+            row(bbo_) << t << ',' << gw.owner(s) << symbol_col(sym) << ',' << data_cols << ',' << book_cols << ','
+                      << (sb ? px(sb->price) + ',' + px(sb->qty) : std::string(",")) << ','
+                      << (sa ? px(sa->price) + ',' + px(sa->qty) : std::string(",")) << ','
+                      << (seen.batches() ? std::to_string(seen.data_time()) : std::string()) << '\n';
+            if (tables_) {
+                BboRow r = base;
+                r.owner = s;
+                if (sb) {
+                    r.seen_bid = sb->price;
+                    r.seen_bid_qty = sb->qty;
+                }
+                if (sa) {
+                    r.seen_ask = sa->price;
+                    r.seen_ask_qty = sa->qty;
+                }
+                r.seen_data_ns = seen.batches() ? seen.data_time() : 0;
+                tables_->bbo.push_back(r);
+            }
+        }
+        if (gw.session_count() == 0) {
+            row(bbo_) << t << ',' << symbol_col(sym) << ',' << data_cols << ',' << book_cols << ",,,,,\n";
+            if (tables_) {
+                base.owner = ResultTables::kNoOwner;
+                tables_->bbo.push_back(base);
+            }
         }
     }
     write_positions(t);
 }
 
 void ResultRecorder::write_positions(uint64_t t) {
-    const Price m = mark();
     SimGateway& gw = sim_.gateway();
-    for (uint32_t s = 0; s < gw.session_count(); ++s) {
-        const Account& a = gw.exchange_account(s);
-        row(positions_) << t << ',' << gw.owner(s) << ',' << px(a.position) << ',' << px(a.cash) << ',' << px(a.fees)
-                        << ',' << px(m) << ',' << px(a.pnl(m)) << ',' << a.fills << ',' << a.maker_fills << ','
-                        << a.taker_fills << ',' << gw.exchange_open_orders(s) << ',' << px(a.base_volume) << ','
-                        << px(a.quote_volume) << '\n';
-        if (tables_) {
-            tables_->positions.push_back(PositionRow{t, s, 0, a.position, a.cash, a.fees, m, a.pnl(m), a.fills,
-                                                     a.maker_fills, a.taker_fills, gw.exchange_open_orders(s),
-                                                     a.base_volume, a.quote_volume});
+    for (uint32_t sym = 0; sym < sim_.symbol_count(); ++sym) {
+        const Price m = mark(sym);
+        for (uint32_t s = 0; s < gw.session_count(); ++s) {
+            const Account& a = gw.exchange_account(s, sym);
+            const size_t open = gw.exchange_open_orders(s, sym);
+            row(positions_) << t << ',' << gw.owner(s) << symbol_col(sym) << ',' << px(a.position) << ','
+                            << px(a.cash) << ',' << px(a.fees) << ',' << px(m) << ',' << px(a.pnl(m)) << ','
+                            << a.fills << ',' << a.maker_fills << ',' << a.taker_fills << ',' << open << ','
+                            << px(a.base_volume) << ',' << px(a.quote_volume) << '\n';
+            if (tables_) {
+                tables_->positions.push_back(PositionRow{t, s, sym, a.position, a.cash, a.fees, m, a.pnl(m), a.fills,
+                                                         a.maker_fills, a.taker_fills, open, a.base_volume,
+                                                         a.quote_volume});
+            }
         }
     }
 }
@@ -334,22 +354,32 @@ json ResultRecorder::finish(const json& meta) {
     output_hash_ = all.hex();
 
     const SimStats& st = sim_.stats();
-    const auto& h = sim_.header();
     json events = json::object();
     for (size_t c = 0; c < st.events.size(); ++c) {
         events[event_class_name(c)] = st.events[c];
     }
-    const Price m = last_mark_;
+    const Price m = last_mark_[0];
     json sessions = json::array();
     SimGateway& gw = sim_.gateway();
     for (uint32_t s = 0; s < gw.session_count(); ++s) {
         const SessionStats ss = gw.stats(s);
+        json accounts = nullptr;  // per symbol, in a multi-symbol run
+        if (multi_) {
+            accounts = json::object();
+            for (uint32_t sym = 0; sym < sim_.symbol_count(); ++sym) {
+                accounts[sim_.header(sym).symbol] =
+                    json{{"exchange_account", account_json(gw.exchange_account(s, sym), last_mark_[sym])},
+                         {"strategy_account", account_json(gw.strategy_account(s, sym), last_mark_[sym])},
+                         {"open_orders", gw.exchange_open_orders(s, sym)}};
+            }
+        }
         sessions.push_back(json{
             {"owner", gw.owner(s)},
             {"strategy", gw.strategy(s).name()},
             {"exchange_account", account_json(gw.exchange_account(s), m)},
             {"strategy_account", account_json(gw.strategy_account(s), m)},
-            {"open_orders", gw.exchange_open_orders(s)},
+            {"open_orders", gw.exchange_open_orders(s, 0)},
+            {"accounts", accounts},
             {"stats",
              {{"orders_sent", ss.orders_sent}, {"cancels_sent", ss.cancels_sent}, {"amends_sent", ss.amends_sent},
               {"replaces_sent", ss.replaces_sent}, {"rate_limited", ss.rate_limited},
@@ -362,8 +392,30 @@ json ResultRecorder::finish(const json& meta) {
               {"timers", ss.timers}, {"held_back", ss.held_back}}},
         });
     }
-    const SynthStats& sy = sim_.synthesizer().stats();
     const SimulatorOptions& opt = sim_.options();
+    auto header_json = [&](size_t i) {
+        const auto& hh = sim_.header(i);
+        return json{{"symbol", hh.symbol}, {"tick_size", format_fixed(hh.tick_size)}, {"lot_size", format_fixed(hh.lot_size)},
+                    {"records", hh.record_count}, {"first_ts_local", hh.first_ts_local},
+                    {"last_ts_local", hh.last_ts_local}, {"source_manifest_sha256", hex(hh.source_manifest_sha256)}};
+    };
+    auto synth_json = [&](size_t i) {
+        const SynthStats& y = sim_.synthesizer(i).stats();
+        return json{{"trades", y.trades}, {"trades_unsynced", y.trades_unsynced}, {"gaps", y.gaps},
+                    {"snapshots", y.snapshots}, {"crossing_fills", y.crossing_fills},
+                    {"tape_strategy_qty", format_fixed(y.tape_strategy_qty)},
+                    {"impact_taken_qty", format_fixed(y.impact_taken_qty)}};
+    };
+    auto permanent_json = [&](size_t i) {
+        const PermanentImpact& pi = sim_.permanent_impact(i);
+        if (!pi.enabled()) return json(nullptr);
+        const int64_t tick = sim_.header(i).tick_size;
+        return json{{"coefficient", pi.config().coefficient}, {"daily_volatility", pi.config().daily_volatility},
+                    {"daily_volume", format_fixed(pi.config().daily_volume)},
+                    {"net_taken_qty", format_fixed(pi.net_qty())}, {"final_shift", format_fixed(pi.shift_ticks() * tick)},
+                    {"max_abs_shift", format_fixed(pi.max_abs_shift_ticks() * tick)},
+                    {"shifts", sim_.synthesizer(i).stats().shifts}};
+    };
     json regime = nullptr;
     if (const LatencyRegime* lr = sim_.gateway().latency_regime()) {
         const LatencyRegimeConfig& c = lr->config();
@@ -377,14 +429,6 @@ json ResultRecorder::finish(const json& meta) {
                       {"delays_scaled", lr->samples()}, {"mean_multiplier", lr->mean_multiplier()},
                       {"max_multiplier", lr->max_multiplier()}};
     }
-    json permanent = nullptr;
-    if (const PermanentImpact& pi = sim_.permanent_impact(); pi.enabled()) {
-        permanent = json{{"coefficient", pi.config().coefficient}, {"daily_volatility", pi.config().daily_volatility},
-                         {"daily_volume", format_fixed(pi.config().daily_volume)},
-                         {"net_taken_qty", format_fixed(pi.net_qty())}, {"final_shift", format_fixed(pi.shift_ticks() * h.tick_size)},
-                         {"max_abs_shift", format_fixed(pi.max_abs_shift_ticks() * h.tick_size)},
-                         {"shifts", sy.shifts}};
-    }
     json out{
         {"format", "bs_sim.run/1"},
         {"window",
@@ -393,25 +437,30 @@ json ResultRecorder::finish(const json& meta) {
           {"end_ns", st.end_ns}}},
         {"simulator",
          {{"seed", opt.seed}, {"queue_model", opt.queue_model}, {"impact_half_life_ms", opt.impact_half_life_ns / 1e6},
-          {"permanent_impact", permanent},
+          {"permanent_impact", permanent_json(0)},
           {"latency_regime", regime}, {"tie_break", opt.tie_break == TieBreak::DATA_FIRST ? "data_first" : "orders_first"}}},
-        {"data_header",
-         {{"symbol", h.symbol}, {"tick_size", format_fixed(h.tick_size)}, {"lot_size", format_fixed(h.lot_size)},
-          {"records", h.record_count}, {"first_ts_local", h.first_ts_local}, {"last_ts_local", h.last_ts_local},
-          {"source_manifest_sha256", hex(h.source_manifest_sha256)}}},
+        {"data_header", header_json(0)},
         {"stats",
          {{"fast_forward_batches", st.fast_forward_batches}, {"data_batches", st.data_batches},
           {"data_left", st.data_left != 0}, {"events", events}, {"dropped", st.dropped}, {"samples", st.samples}}},
-        {"synthesizer",
-         {{"trades", sy.trades}, {"trades_unsynced", sy.trades_unsynced}, {"gaps", sy.gaps},
-          {"snapshots", sy.snapshots}, {"crossing_fills", sy.crossing_fills},
-          {"tape_strategy_qty", format_fixed(sy.tape_strategy_qty)},
-          {"impact_taken_qty", format_fixed(sy.impact_taken_qty)}}},
+        {"synthesizer", synth_json(0)},
         {"final_mark", format_fixed(m)},
         {"sessions", sessions},
         {"outputs", outputs},
         {"output_hash", output_hash_},
     };
+    if (multi_) {
+        // Every symbol, the primary first; the sections above are the primary's
+        json symbols = json::array();
+        for (size_t i = 0; i < sim_.symbol_count(); ++i) {
+            symbols.push_back(json{{"symbol", sim_.header(i).symbol}, {"data_header", header_json(i)},
+                                   {"synthesizer", synth_json(i)}, {"permanent_impact", permanent_json(i)},
+                                   {"final_mark", format_fixed(last_mark_[i])}});
+        }
+        out["symbols"] = symbols;
+    } else {
+        for (auto& session : out["sessions"]) session.erase("accounts");
+    }
     for (const auto& [key, value] : meta.items()) {
         out[key] = value;
     }
@@ -428,6 +477,16 @@ json run_inputs(const RunConfig& rc) {
     if (!rc.manifest_path.empty()) {
         data["manifest"] = rc.manifest_path;
         data["manifest_sha256"] = Sha256::of_file(rc.manifest_path);
+    }
+    if (rc.files.size() > 1) {
+        // Every symbol's file, the primary first (the keys above are the primary's)
+        json files = json::array();
+        for (const DataFile& f : rc.files) {
+            json e{{"symbol", f.symbol}, {"file", f.bse_path}};
+            if (!f.bse_sha256.empty()) e["sha256"] = f.bse_sha256;
+            files.push_back(e);
+        }
+        data["symbols"] = files;
     }
     return json{{"config", rc.resolved}, {"config_sha256", Sha256::of(rc.resolved.dump())}, {"data", data}};
 }

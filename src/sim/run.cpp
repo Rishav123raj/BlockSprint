@@ -14,7 +14,7 @@ RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra, Strategy* s
         owned = make_strategy(rc.strategy_name, rc.strategy_params);
         strategy = owned.get();
     }
-    Simulator sim(rc.bse_path, rc.sim);
+    Simulator sim(rc.bse_paths(), rc.sim);
     const uint32_t s = sim.add_strategy(*strategy, rc.session());
     ResultRecorder recorder(sim, rc.output_dir, rc.sample_ns);
     std::shared_ptr<ResultTables> tables = keep_tables ? recorder.keep_tables() : nullptr;

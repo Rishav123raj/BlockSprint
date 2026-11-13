@@ -235,6 +235,45 @@ TEST_CASE("datasets: a .bse file directly; a symbol is needed when the manifest 
     CHECK(contains(error_of(cfg), "dataset: no such file"));
 }
 
+TEST_CASE("several symbols (P6.7): a list from the manifest, or a list of files; the first is the primary") {
+    Dataset d;
+    json cfg = minimal(d);
+    cfg["symbol"] = json::array({"OTHERUSDT", "TESTUSDT"});
+    const RunConfig rc = resolve_run_config(cfg);
+    REQUIRE(rc.files.size() == 2);
+    CHECK(rc.symbol == "OTHERUSDT");
+    CHECK(rc.bse_sha256 == std::string(64, 'b'));
+    CHECK(rc.files[1].symbol == "TESTUSDT");
+    CHECK(rc.files[1].bse_sha256 == std::string(64, 'a'));
+    CHECK(rc.bse_paths() == std::vector<std::string>{rc.files[0].bse_path, rc.files[1].bse_path});
+    CHECK(rc.resolved["symbol"] == json::array({"OTHERUSDT", "TESTUSDT"}));
+    CHECK(resolve_run_config(rc.resolved).files.size() == 2);  // resolves to itself
+    // One symbol, as a list or not, is a one-symbol run
+    cfg["symbol"] = json::array({"TESTUSDT"});
+    CHECK(resolve_run_config(cfg).resolved["symbol"] == "TESTUSDT");
+
+    // A list of .bse files: the symbols come from their headers
+    json files = minimal(d);
+    files.erase("symbol");
+    files["dataset"] = json::array({(d.dir / "TESTUSDT.bse").string(), (d.dir / "OTHERUSDT.bse").string()});
+    const RunConfig rf = resolve_run_config(files);
+    CHECK(rf.resolved["symbol"] == json::array({"TESTUSDT", "OTHERUSDT"}));
+    CHECK(rf.files[1].bse_sha256.empty());
+
+    cfg["symbol"] = json::array({"TESTUSDT", "TESTUSDT"});
+    CHECK(contains(error_of(cfg), "symbol: 'TESTUSDT' twice"));
+    cfg["symbol"] = json::array();
+    CHECK(contains(error_of(cfg), "symbol: an empty list"));
+    cfg["symbol"] = json::array({"TESTUSDT", "ETHUSDT"});
+    CHECK(contains(error_of(cfg), "'ETHUSDT' is not in the dataset"));
+    files["symbol"] = json::array({"TESTUSDT"});
+    CHECK(contains(error_of(files), "a list of 2 files needs as many symbols"));
+    json one = minimal(d);
+    one["dataset"] = (d.dir / "TESTUSDT.bse").string();
+    one["symbol"] = json::array({"TESTUSDT", "OTHERUSDT"});
+    CHECK(contains(error_of(one), "several symbols need a dataset directory"));
+}
+
 TEST_CASE("errors name the key") {
     Dataset d;
     const json cfg = minimal(d);

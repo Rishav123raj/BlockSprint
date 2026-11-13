@@ -2,10 +2,10 @@
 // RiskGuard (P6.4): pre-trade limits on a strategy's own requests, checked in its Context before they enter
 // the latency pipe, against what the strategy knows (its account, its open orders, its observed book):
 //
-//   max_position        |position| if the order and every other open order on its side filled
+//   max_position        |position| if the order and every other open order on its side filled (per symbol)
 //   max_order_notional  price x quantity of one order (a MARKET order at the observed best opposite price)
-//   max_open_orders     open and pending orders, for a new order
-//   max_drawdown        kill switch: when PnL at the observed mid falls this far below its running high,
+//   max_open_orders     open and pending orders, for a new order (all symbols)
+//   max_drawdown        kill switch: when PnL at the observed mids (all symbols) falls this far below its running high,
 //                       every open order is cancelled and from then on only orders that reduce the
 //                       position (without reversing it, counting the open orders on their side) pass
 //
@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <string>
 
 namespace sim {
@@ -42,7 +43,8 @@ public:
     explicit RiskGuard(RiskLimits limits) : limits_(limits) {}
 
     // A new order, or the new version of `replacing` (a replace or an amend): its other open orders count,
-    // that one doesn't
+    // that one doesn't. account and book are the order's symbol's; so are the open orders on its side
+    // (OpenOrder::symbol == book.symbol()).
     RiskVerdict check_order(Side side, OrderType type, Price price, Quantity quantity, const Account& account,
                             const std::map<OrderId, OpenOrder>& orders, const ObservedBook& book,
                             const OrderId* replacing = nullptr) const;
@@ -50,6 +52,11 @@ public:
     // Marks the strategy's PnL at the observed mid (no-op without max_drawdown or a mark); true when this
     // call trips the kill switch
     bool update(const Account& account, const ObservedBook& book, uint64_t now);
+    // The same with the PnL already marked (several symbols: the sum)
+    bool update(int64_t pnl, uint64_t now);
+
+    // The strategy's mark for a book: the observed mid, else the last trade
+    static std::optional<Price> mark(const ObservedBook& book);
 
     const RiskLimits& limits() const { return limits_; }
     bool killed() const { return killed_at_ != 0; }

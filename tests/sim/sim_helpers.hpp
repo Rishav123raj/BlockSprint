@@ -75,7 +75,17 @@ struct Stream {
     Stream& trade(int64_t ms, uint8_t aggressor, int64_t px, int64_t lots) {
         return trade_ns(ms * static_cast<int64_t>(kMs), aggressor, px, lots);
     }
+    Stream& gap(int64_t ms) {
+        r.push_back(rec(ms * static_cast<int64_t>(kMs), bse::GAP, 0, 0, 0, bse::LAST_IN_BATCH));
+        return *this;
+    }
     void write(const TempPath& f) const { bse::write_file(f.str(), test_header(), r); }
+    // The same records under another symbol (P6.7: multi-symbol runs)
+    void write(const TempPath& f, const std::string& symbol) const {
+        bse::Header h = test_header();
+        h.symbol = symbol;
+        bse::write_file(f.str(), h, r);
+    }
 };
 
 inline std::shared_ptr<const LatencyModel> constant_ms(double ms) { return std::make_shared<ConstantLatency>(ms * 1e6); }

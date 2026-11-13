@@ -10,6 +10,9 @@
 //   gaps            each session's gap policy (P6.5) acts when the strategy sees a GAP: halt cancels every open
 //                   order and refuses new ones until a snapshot resyncs its book; flatten also closes the
 //                   position with a MARKET order at the resync; continue leaves it all to the strategy
+//   symbols         (P6.7) a run can have several symbols, the first the primary. Each session keeps a book,
+//                   two accounts, open orders and a gap halt per symbol; the request limits are the
+//                   connection's (all symbols, as on Binance), max open orders is per symbol.
 //   exchange side   arriving requests go through Binance's limits (request weight per minute; orders per 10 s
 //                   and per day, open orders), then into the engine. Every engine report for a strategy's order, whatever caused it (its
 //                   own request, a data trade, another strategy), updates the exchange-side account and is
@@ -45,6 +48,7 @@ struct Request {
     enum class Type : uint8_t { NEW, CANCEL, AMEND, REPLACE };
     Type type = Type::NEW;
     OrderId order_id;
+    uint32_t symbol = 0;                  // index in the gateway's symbols
     Side side = Side::BUY;
     OrderType order_type = OrderType::LIMIT;
     Price price = 0;
@@ -66,6 +70,13 @@ struct SimEvent {
     std::variant<Batch, Request, ExecReport, RequestReject, TimerFire> body;
 };
 using SimQueue = EventQueue<SimEvent>;
+
+// A symbol the gateway routes (1e-8 units per tick and lot of its data)
+struct SymbolInfo {
+    std::string name;
+    int64_t tick_size = 0;
+    int64_t lot_size = 0;
+};
 
 // Binance spot defaults; 0 = no limit
 struct GatewayLimits {
@@ -141,6 +152,8 @@ public:
     // outlive the gateway.
     SimGateway(MatchingEngine& engine, SimQueue& queue, std::string symbol, int64_t tick_size, int64_t lot_size,
                uint64_t seed);
+    // Several symbols, the primary first (P6.7). Throws std::invalid_argument on none or a duplicate.
+    SimGateway(MatchingEngine& engine, SimQueue& queue, std::vector<SymbolInfo> symbols, uint64_t seed);
     ~SimGateway();
     SimGateway(const SimGateway&) = delete;
     SimGateway& operator=(const SimGateway&) = delete;
@@ -158,14 +171,18 @@ public:
     void dispatch(const SimQueue::Event& e);   // ORDER_ARRIVE, STRATEGY_MD, STRATEGY_EXEC and TIMER events
     void end();                                // on_end of every strategy
 
-    // Results
-    const Account& exchange_account(uint32_t session) const;   // fills as they happened
-    const Account& strategy_account(uint32_t session) const;   // fills the strategy has learned of
+    // Results; without a symbol index, the primary symbol's
+    const Account& exchange_account(uint32_t session, uint32_t symbol = 0) const;  // fills as they happened
+    const Account& strategy_account(uint32_t session, uint32_t symbol = 0) const;  // fills the strategy has learned of
     SessionStats stats(uint32_t session) const;
     Context& context(uint32_t session);
     const std::string& owner(uint32_t session) const;
     const Strategy& strategy(uint32_t session) const;
-    size_t exchange_open_orders(uint32_t session) const;  // as the exchange knows them
+    size_t exchange_open_orders(uint32_t session) const;  // as the exchange knows them, all symbols
+    size_t exchange_open_orders(uint32_t session, uint32_t symbol) const;
+    const std::vector<SymbolInfo>& symbols() const { return symbols_; }
+    const std::vector<std::string>& symbol_names() const { return names_; }
+    uint32_t symbol_index(const std::string& name) const;  // throws std::invalid_argument for an unknown one
 
     // nullptr to remove; the listener must outlive the gateway or be removed first
     void set_listener(GatewayListener* listener) { listener_ = listener; }
@@ -189,9 +206,9 @@ private:
 
     MatchingEngine& engine_;
     SimQueue& queue_;
-    std::string symbol_;
-    int64_t tick_;
-    int64_t lot_;
+    std::vector<SymbolInfo> symbols_;
+    std::vector<std::string> names_;
+    std::unordered_map<std::string, uint32_t> by_symbol_;
     uint64_t seed_;
     uint64_t trading_from_ = 0;
     std::vector<std::unique_ptr<Session>> sessions_;

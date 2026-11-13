@@ -288,47 +288,103 @@ std::shared_ptr<const LatencyModel> latency_model(const json& j, const std::stri
 
 // ---- dataset ----
 
-void resolve_dataset(const std::string& dataset, RunConfig& rc) {
+// One symbol's file: a .bse file, or the symbol's entry of a dataset directory's manifest (symbol may be
+// empty when the manifest has one file)
+DataFile resolve_file(const std::string& dataset, const std::string& symbol, const std::string& key) {
+    DataFile f;
     const fs::path p(dataset);
     if (fs::is_directory(p)) {
         const fs::path manifest = p / "manifest.json";
         std::ifstream in(manifest);
-        if (!in) bad("dataset", "no manifest.json in " + dataset);
+        if (!in) bad(key, "no manifest.json in " + dataset);
         json m;
         try {
             in >> m;
         } catch (const std::exception& e) {
-            bad("dataset", manifest.string() + ": " + e.what());
+            bad(key, manifest.string() + ": " + e.what());
         }
-        if (!m.contains("files") || !m["files"].is_array()) bad("dataset", manifest.string() + " has no \"files\" list");
+        if (!m.contains("files") || !m["files"].is_array()) bad(key, manifest.string() + " has no \"files\" list");
         std::vector<std::string> symbols;
         const json* entry = nullptr;
-        for (const auto& f : m["files"]) {
-            const std::string s = f.value("symbol", "");
+        for (const auto& e : m["files"]) {
+            const std::string s = e.value("symbol", "");
             symbols.push_back(s);
-            if (s == rc.symbol || (rc.symbol.empty() && m["files"].size() == 1)) {
-                entry = &f;
+            if (s == symbol || (symbol.empty() && m["files"].size() == 1)) {
+                entry = &e;
             }
         }
         if (!entry) {
             std::string list;
             for (const auto& s : symbols) list += (list.empty() ? "" : ", ") + s;
-            bad("symbol", rc.symbol.empty() ? "the dataset has several symbols (" + list + "): choose one"
-                                            : "'" + rc.symbol + "' is not in the dataset (" + list + ")");
+            bad("symbol", symbol.empty() ? "the dataset has several symbols (" + list + "): choose one"
+                                         : "'" + symbol + "' is not in the dataset (" + list + ")");
         }
-        rc.bse_path = (p / entry->value("file", "")).generic_string();
-        rc.bse_sha256 = entry->value("sha256", "");
-        rc.manifest_path = manifest.generic_string();
+        f.bse_path = (p / entry->value("file", "")).generic_string();
+        f.bse_sha256 = entry->value("sha256", "");
+        f.manifest_path = manifest.generic_string();
     } else if (fs::is_regular_file(p)) {
-        rc.bse_path = dataset;
+        f.bse_path = dataset;
     } else {
-        bad("dataset", "no such file or directory: " + dataset);
+        bad(key, "no such file or directory: " + dataset);
     }
-    Replayer rp(rc.bse_path);  // validates the file's header
-    if (!rc.symbol.empty() && rc.symbol != rp.header().symbol) {
-        bad("symbol", "'" + rc.symbol + "' but " + rc.bse_path + " holds " + rp.header().symbol);
+    Replayer rp(f.bse_path);  // validates the file's header
+    if (!symbol.empty() && symbol != rp.header().symbol) {
+        bad("symbol", "'" + symbol + "' but " + f.bse_path + " holds " + rp.header().symbol);
     }
-    rc.symbol = rp.header().symbol;
+    f.symbol = rp.header().symbol;
+    return f;
+}
+
+// dataset: a directory with a manifest or a .bse file, or (P6.7) a list of .bse files; symbol: one, or a
+// list (P6.7). Several symbols make a multi-symbol run, the first the primary. Updates r's symbol.
+void resolve_dataset(json& r, RunConfig& rc) {
+    std::vector<std::string> wanted;
+    if (r.contains("symbol")) {
+        const json& s = r["symbol"];
+        if (s.is_array()) {
+            if (s.empty()) bad("symbol", "an empty list");
+            for (size_t i = 0; i < s.size(); ++i) {
+                if (!s[i].is_string() || s[i].get<std::string>().empty()) {
+                    bad("symbol", "expected a list of symbol names, got " + s.dump());
+                }
+                wanted.push_back(s[i].get<std::string>());
+            }
+        } else if (!get_string(r, "symbol").empty()) {
+            wanted.push_back(s.get<std::string>());
+        }
+    }
+    const json d = at(r, "dataset");  // a copy: GCC can't see that at() returns into r
+    if (d.is_array()) {
+        if (d.empty()) bad("dataset", "an empty list");
+        if (!wanted.empty() && wanted.size() != d.size()) {
+            bad("symbol", "a list of " + std::to_string(d.size()) + " files needs as many symbols (or none)");
+        }
+        for (size_t i = 0; i < d.size(); ++i) {
+            if (!d[i].is_string()) bad("dataset", "expected a list of .bse files, got " + d.dump());
+            if (!fs::is_regular_file(d[i].get<std::string>())) bad("dataset", "not a .bse file: " + d[i].get<std::string>());
+            rc.files.push_back(resolve_file(d[i].get<std::string>(), wanted.empty() ? "" : wanted[i], "dataset"));
+        }
+    } else {
+        const std::string dataset = get_string(r, "dataset");
+        if (wanted.size() <= 1) {
+            rc.files.push_back(resolve_file(dataset, wanted.empty() ? "" : wanted[0], "dataset"));
+        } else {
+            if (!fs::is_directory(dataset)) bad("symbol", "several symbols need a dataset directory or a list of files");
+            for (const auto& w : wanted) rc.files.push_back(resolve_file(dataset, w, "dataset"));
+        }
+    }
+    std::set<std::string> seen;
+    json names = json::array();
+    for (const DataFile& f : rc.files) {
+        if (!seen.insert(f.symbol).second) bad("symbol", "'" + f.symbol + "' twice");
+        names.push_back(f.symbol);
+    }
+    const DataFile& primary = rc.files.front();
+    rc.symbol = primary.symbol;
+    rc.bse_path = primary.bse_path;
+    rc.bse_sha256 = primary.bse_sha256;
+    rc.manifest_path = primary.manifest_path;
+    r["symbol"] = rc.files.size() == 1 ? json(rc.symbol) : names;
 }
 
 } // namespace
@@ -425,6 +481,13 @@ json latency_preset(const std::string& name) {
 
 std::vector<std::string> latency_preset_names() { return {"zero", "binance_spot_tokyo_vps", "binance_spot_home_pc"}; }
 
+std::vector<std::string> RunConfig::bse_paths() const {
+    std::vector<std::string> paths;
+    for (const DataFile& f : files) paths.push_back(f.bse_path);
+    if (paths.empty()) paths.push_back(bse_path);
+    return paths;
+}
+
 SessionConfig RunConfig::session() const {
     SessionConfig c;
     c.owner = owner;
@@ -458,9 +521,7 @@ RunConfig resolve_run_config(const json& file, const std::vector<std::string>& o
     check_keys(r, "");
 
     RunConfig rc;
-    rc.symbol = r.contains("symbol") ? get_string(r, "symbol") : "";
-    resolve_dataset(get_string(r, "dataset"), rc);
-    r["symbol"] = rc.symbol;
+    resolve_dataset(r, rc);
 
     SimulatorOptions& o = rc.sim;
     o.from_ns = get_time(r, "window.from");

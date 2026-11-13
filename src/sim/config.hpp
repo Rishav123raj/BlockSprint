@@ -24,14 +24,25 @@
 
 namespace sim {
 
+// One symbol's data file
+struct DataFile {
+    std::string symbol;
+    std::string bse_path;
+    std::string bse_sha256;    // from the dataset manifest; empty when the config names a .bse file directly
+    std::string manifest_path; // empty when the config names a .bse file directly
+};
+
 struct RunConfig {
     nlohmann::json resolved;
 
-    // Data
+    // Data: the primary symbol's (the first)
     std::string bse_path;      // the symbol's .bse file
     std::string symbol;
     std::string bse_sha256;    // from the dataset manifest; empty when the config names a .bse file directly
     std::string manifest_path; // empty when the config names a .bse file directly
+    // P6.7: every symbol, the primary first (one entry for a one-symbol run)
+    std::vector<DataFile> files;
+    std::vector<std::string> bse_paths() const;
 
     SimulatorOptions sim;
 

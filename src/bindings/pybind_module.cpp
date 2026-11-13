@@ -110,11 +110,14 @@ public:
     void on_book(Context& ctx, const ObservedBook& book) override {
         if (!book_ || mode_ == CallbackMode::TIMER_ONLY) return;
         if (mode_ == CallbackMode::ON_CHANGE) {
+            // per symbol: one symbol's book doesn't hide another's change
+            if (tops_.size() <= book.index()) tops_.resize(book.index() + 1);
+            Top& top = tops_[book.index()];
             const auto bid = book.best_bid(), ask = book.best_ask();
-            if (seen_top_ && bid == last_bid_ && ask == last_ask_) return;
-            seen_top_ = true;
-            last_bid_ = bid;
-            last_ask_ = ask;
+            if (top.seen && bid == top.bid && ask == top.ask) return;
+            top.seen = true;
+            top.bid = bid;
+            top.ask = ask;
         }
         py::gil_scoped_acquire gil;
         ++callbacks_;
@@ -168,8 +171,11 @@ private:
     CallbackMode mode_;
     std::string name_;
     py::object start_, book_, trade_, exec_, reject_, timer_, gap_, end_;
-    bool seen_top_ = false;
-    std::optional<BookLevel> last_bid_, last_ask_;
+    struct Top {
+        bool seen = false;
+        std::optional<BookLevel> bid, ask;
+    };
+    std::vector<Top> tops_;  // the last top of book passed on, per symbol (on_change)
     uint64_t callbacks_ = 0;  // read with the GIL held, after the run
 };
 
@@ -282,15 +288,16 @@ PYBIND11_MODULE(blocksprint_sim, m) {
     m.attr("FIXED_SCALE") = kFixedScale;
 
     // numpy dtypes of the result rows (recorder.hpp); padding is left out of the fields, kept in the itemsize
-    PYBIND11_NUMPY_DTYPE(OrderRow, sent_ns, arrive_ns, owner, order, request, side, order_type, stp, has_new_price, price,
-                             quantity, new_price);
+    PYBIND11_NUMPY_DTYPE(OrderRow, sent_ns, arrive_ns, owner, order, request, side, order_type, stp, has_new_price, symbol,
+                             price, quantity, new_price);
     PYBIND11_NUMPY_DTYPE(ReportRow, exchange_ns, deliver_ns, seq, owner, order, type, reason, side, order_type, liquidity,
-                             price, quantity, last_px, last_qty, cum_qty, leaves_qty, fee, cum_fee);
-    PYBIND11_NUMPY_DTYPE(RejectRow, exchange_ns, deliver_ns, owner, order, request, reason);
-    PYBIND11_NUMPY_DTYPE(BboRow, ts_ns, owner, data_bid, data_bid_qty, data_ask, data_ask_qty, book_bid, book_bid_qty,
-                             book_ask, book_ask_qty, seen_bid, seen_bid_qty, seen_ask, seen_ask_qty, seen_data_ns);
-    PYBIND11_NUMPY_DTYPE(PositionRow, ts_ns, owner, position, cash, fees, mark, pnl, fills, maker_fills, taker_fills,
-                             open_orders, base_volume, quote_volume);
+                             symbol, price, quantity, last_px, last_qty, cum_qty, leaves_qty, fee, cum_fee);
+    PYBIND11_NUMPY_DTYPE(RejectRow, exchange_ns, deliver_ns, owner, order, request, reason, symbol);
+    PYBIND11_NUMPY_DTYPE(BboRow, ts_ns, owner, symbol, data_bid, data_bid_qty, data_ask, data_ask_qty, book_bid,
+                             book_bid_qty, book_ask, book_ask_qty, seen_bid, seen_bid_qty, seen_ask, seen_ask_qty,
+                             seen_data_ns);
+    PYBIND11_NUMPY_DTYPE(PositionRow, ts_ns, owner, symbol, position, cash, fees, mark, pnl, fills, maker_fills,
+                             taker_fills, open_orders, base_volume, quote_volume);
     PYBIND11_NUMPY_DTYPE(BboPoint, ts_ns, bid, bid_qty, ask, ask_qty);
     PYBIND11_NUMPY_DTYPE(TradePoint, ts_ns, px, qty, side);
 
@@ -378,6 +385,7 @@ PYBIND11_MODULE(blocksprint_sim, m) {
         .def_readonly("price", &TradeEvent::price)
         .def_readonly("qty", &TradeEvent::qty)
         .def_readonly("aggressor", &TradeEvent::aggressor)
+        .def_readonly("symbol", &TradeEvent::symbol, "Index in ctx.symbols()")
         .def("__repr__", [](const TradeEvent& t) {
             return std::string("TradeEvent(") + (t.aggressor == Side::BUY ? "buy " : "sell ") + format_fixed(t.qty) +
                    " @ " + format_fixed(t.price) + ")";
@@ -386,6 +394,7 @@ PYBIND11_MODULE(blocksprint_sim, m) {
     py::class_<ObservedBook>(m, "ObservedBook",
                              "The market as the strategy sees it, after feed latency (valid during the callback)")
         .def("valid", &ObservedBook::valid, "A snapshot has established the book and no gap has happened since")
+        .def_property_readonly("symbol", &ObservedBook::symbol)
         .def("best_bid", &ObservedBook::best_bid)
         .def("best_ask", &ObservedBook::best_ask)
         .def("qty", &ObservedBook::qty, py::arg("side"), py::arg("price"))
@@ -432,6 +441,7 @@ PYBIND11_MODULE(blocksprint_sim, m) {
     py::class_<RequestReject>(m, "RequestReject")
         .def_readonly("request", &RequestReject::request)
         .def_readonly("order_id", &RequestReject::order_id)
+        .def_readonly("symbol", &RequestReject::symbol)
         .def_readonly("reason", &RequestReject::reason)
         .def_readonly("text", &RequestReject::text)
         .def_readonly("exchange_time", &RequestReject::exchange_time);
@@ -449,6 +459,7 @@ PYBIND11_MODULE(blocksprint_sim, m) {
 
     py::class_<OpenOrder>(m, "OpenOrder")
         .def_readonly("id", &OpenOrder::id)
+        .def_readonly("symbol", &OpenOrder::symbol)
         .def_readonly("side", &OpenOrder::side)
         .def_readonly("type", &OpenOrder::type)
         .def_readonly("price", &OpenOrder::price)
@@ -460,19 +471,37 @@ PYBIND11_MODULE(blocksprint_sim, m) {
 
     py::class_<Context>(m, "Context", "A strategy's connection to the exchange (valid during the callback)")
         .def("now", &Context::now, "Sim time of the callback (ns since the epoch)")
-        .def("symbol", &Context::symbol)
+        .def("symbol", &Context::symbol, "The run's primary symbol")
+        .def("symbols", &Context::symbols, "Every symbol of the run, the primary first")
         .def("owner", &Context::owner)
-        .def("book", &Context::book, py::return_value_policy::reference)
+        .def(
+            "book",
+            [](const Context& c, const std::optional<std::string>& symbol) -> const ObservedBook& {
+                return symbol ? c.book(*symbol) : c.book();
+            },
+            py::arg("symbol") = py::none(), py::return_value_policy::reference,
+            "A symbol's book (the primary's without one)")
         .def("can_trade", &Context::can_trade, "False during the warm-up: requests raise RuntimeError then")
-        .def("send", &Context::send, py::arg("side"), py::arg("type"), py::arg("price"), py::arg("quantity"),
-             py::arg("stp") = StpPolicy::CANCEL_MAKER, "Sends a new order; returns its ID")
+        .def(
+            "send",
+            [](Context& c, Side side, OrderType type, Price price, Quantity quantity, StpPolicy stp,
+               const std::optional<std::string>& symbol) {
+                return symbol ? c.send(*symbol, side, type, price, quantity, stp) : c.send(side, type, price, quantity, stp);
+            },
+            py::arg("side"), py::arg("type"), py::arg("price"), py::arg("quantity"),
+            py::arg("stp") = StpPolicy::CANCEL_MAKER, py::arg("symbol") = py::none(),
+            "Sends a new order (on the primary symbol without one); returns its ID")
         .def("cancel", &Context::cancel, py::arg("order_id"))
         .def("amend", &Context::amend, py::arg("order_id"), py::arg("new_total"), py::arg("new_price") = py::none(),
              "New total quantity (filled + open), optionally a new price")
         .def("replace", &Context::replace, py::arg("order_id"), py::arg("price"), py::arg("quantity"),
              "Cancel and send under the same ID (loses queue priority)")
         .def(
-            "account", [](const Context& c) { return c.account(); }, "The account as the strategy knows it (a copy)")
+            "account",
+            [](const Context& c, const std::optional<std::string>& symbol) {
+                return symbol ? c.account(*symbol) : c.account();
+            },
+            py::arg("symbol") = py::none(), "A symbol's account as the strategy knows it (a copy; the primary's without one)")
         .def(
             "open_orders", [](const Context& c) { return c.open_orders(); }, "Order ID -> OpenOrder (a copy)")
         .def("set_timer", &Context::set_timer, py::arg("delay_ns"), "on_timer after delay_ns; returns the timer ID")

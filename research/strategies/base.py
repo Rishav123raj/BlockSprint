@@ -62,11 +62,14 @@ class TradeEvent(Protocol):
     price: int
     qty: int
     aggressor: bs.Side    # BUY: a buyer lifted the ask
+    symbol: int           # index in ctx.symbols()
 
 
 class Book(Protocol):
     """The market as the strategy sees it, after feed latency (bs.ObservedBook). Valid during the callback."""
 
+    @property
+    def symbol(self) -> str: ...
     @property
     def tick_size(self) -> int: ...
     @property
@@ -127,6 +130,7 @@ class RequestReject(Protocol):
     """A refused cancel, amend or replace."""
     request: bs.Request
     order_id: str
+    symbol: str
     reason: bs.ExecReason  # NONE: the order isn't open (unknown, filled or cancelled)
     text: str
     exchange_time: int
@@ -151,6 +155,7 @@ class Account(Protocol):
 class OpenOrder(Protocol):
     """An order as the strategy knows it (a copy)."""
     id: str
+    symbol: str
     side: bs.Side
     type: bs.OrderType
     price: int
@@ -168,11 +173,18 @@ class Context(Protocol):
         """Sim time of the callback (ns since the epoch)."""
         ...
 
-    def symbol(self) -> str: ...
+    def symbol(self) -> str:
+        """The run's primary symbol: the one the calls without a symbol act on."""
+        ...
+
+    def symbols(self) -> list[str]:
+        """Every symbol of the run, the primary first (several in a multi-symbol run)."""
+        ...
+
     def owner(self) -> str: ...
 
-    def book(self) -> Book:
-        """The market as the strategy sees it (delayed by feed latency)."""
+    def book(self, symbol: str | None = None) -> Book:
+        """The market as the strategy sees it (delayed by feed latency); the primary symbol's without one."""
         ...
 
     def can_trade(self) -> bool:
@@ -180,8 +192,9 @@ class Context(Protocol):
         ...
 
     def send(self, side: bs.Side, type: bs.OrderType, price: int, quantity: int,
-             stp: bs.StpPolicy = bs.StpPolicy.CANCEL_MAKER) -> str:
-        """Sends a new order; returns its ID. A bad order comes back as a REJECTED report."""
+             stp: bs.StpPolicy = bs.StpPolicy.CANCEL_MAKER, symbol: str | None = None) -> str:
+        """Sends a new order (on the primary symbol without one); returns its ID. A bad order comes back as a
+        REJECTED report. Cancel, amend and replace act on the order's own symbol."""
         ...
 
     def cancel(self, order_id: str) -> None: ...
@@ -194,8 +207,8 @@ class Context(Protocol):
         """Cancel and send under the same ID (loses queue priority); refused if the order is no longer open."""
         ...
 
-    def account(self) -> Account:
-        """The account as the strategy knows it (a copy)."""
+    def account(self, symbol: str | None = None) -> Account:
+        """A symbol's account as the strategy knows it (a copy; the primary's without one)."""
         ...
 
     def open_orders(self) -> dict[str, OpenOrder]:

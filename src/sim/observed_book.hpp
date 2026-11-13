@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace sim {
@@ -32,11 +33,15 @@ struct TradeEvent {
     Price price;
     Quantity qty;
     Side aggressor;     // BUY: a buyer lifted the ask
+    uint32_t symbol = 0;  // index in the run's symbols (Context::symbols())
 };
 
 class ObservedBook {
 public:
-    ObservedBook(int64_t tick_size, int64_t lot_size);
+    ObservedBook(int64_t tick_size, int64_t lot_size, std::string symbol = {}, uint32_t index = 0);
+
+    const std::string& symbol() const { return symbol_; }
+    uint32_t index() const { return index_; }  // in the run's symbols
 
     // Applies a batch delivered at sim time seen_at. DEPTH, SNAPSHOT and GAP change the book; a TRADE
     // only updates last_trade().
@@ -72,6 +77,8 @@ private:
 
     int64_t tick_;
     int64_t lot_;
+    std::string symbol_;
+    uint32_t index_;
     int64_t shift_ = 0;  // ticks, from the newest batch
     L2Book book_;
     bool valid_ = false;

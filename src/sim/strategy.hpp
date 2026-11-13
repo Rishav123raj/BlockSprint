@@ -12,6 +12,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace sim {
 
@@ -48,6 +49,7 @@ enum class OrderStatus {
 // An order as the strategy knows it (from what it sent and the reports it has received)
 struct OpenOrder {
     OrderId id;
+    std::string symbol;
     Side side = Side::BUY;
     OrderType type = OrderType::LIMIT;
     Price price = 0;
@@ -63,6 +65,7 @@ struct RequestReject {
     enum class Request { CANCEL, AMEND, REPLACE };
     Request request = Request::CANCEL;
     OrderId order_id;
+    std::string symbol;
     ExecReason reason = ExecReason::NONE;  // NONE: the order isn't open (unknown, filled or cancelled)
     std::string text;
     uint64_t exchange_time = 0;
@@ -76,11 +79,16 @@ public:
 
     // Sim time of the callback being run (ns since the epoch)
     virtual uint64_t now() const = 0;
+    // The run's primary symbol (the first). The calls without a symbol are for this one.
     virtual const std::string& symbol() const = 0;
+    // Every symbol of the run, the primary first (P6.7: multi-symbol runs; one symbol otherwise)
+    virtual const std::vector<std::string>& symbols() const = 0;
     virtual const std::string& owner() const = 0;
 
-    // The market as the strategy sees it (delayed by feed latency)
+    // The market as the strategy sees it (delayed by feed latency). An unknown symbol throws
+    // std::invalid_argument.
     virtual const ObservedBook& book() const = 0;
+    virtual const ObservedBook& book(const std::string& symbol) const = 0;
 
     // False during the run's warm-up: the strategy sees the market but may not send, cancel, amend or
     // replace (those calls throw std::logic_error). Timers are allowed.
@@ -89,6 +97,9 @@ public:
     // Sends a new order; returns its ID. Validation happens at the exchange: a bad order comes back REJECTED.
     virtual OrderId send(Side side, OrderType type, Price price, Quantity quantity,
                          StpPolicy stp = StpPolicy::CANCEL_MAKER) = 0;
+    virtual OrderId send(const std::string& symbol, Side side, OrderType type, Price price, Quantity quantity,
+                         StpPolicy stp = StpPolicy::CANCEL_MAKER) = 0;
+    // Cancel, amend and replace act on the order's own symbol
     virtual void cancel(const OrderId& id) = 0;
     // New total quantity (filled + open, as on Binance) and optionally a new price
     virtual void amend(const OrderId& id, Quantity new_total, std::optional<Price> new_price = std::nullopt) = 0;
@@ -96,8 +107,10 @@ public:
     // order, if the old one is no longer open when the request arrives.
     virtual void replace(const OrderId& id, Price price, Quantity quantity) = 0;
 
-    // As known to the strategy
+    // As known to the strategy: the account per symbol (position in its base asset, cash in its quote asset);
+    // open orders of every symbol (OpenOrder::symbol)
     virtual const Account& account() const = 0;
+    virtual const Account& account(const std::string& symbol) const = 0;
     virtual const std::map<OrderId, OpenOrder>& open_orders() const = 0;
 
     // A TIMER callback after delay_ns (no latency); returns its ID
@@ -111,13 +124,15 @@ public:
     virtual std::string name() const = 0;
 
     virtual void on_start(Context&) {}
-    // A depth event or snapshot reached the strategy; book is ctx.book()
+    // A depth event or snapshot reached the strategy; book is ctx.book(book.symbol())
     virtual void on_book(Context&, const ObservedBook&) {}
+    // A data trade; ctx.symbols()[trade.symbol] is its symbol
     virtual void on_trade(Context&, const TradeEvent&) {}
     virtual void on_exec(Context&, const ExecReport&) {}
     virtual void on_reject(Context&, const RequestReject&) {}
     virtual void on_timer(Context&, uint64_t /*timer_id*/) {}
-    // Updates were lost; the book is invalid until the next snapshot (on_book with ctx.book().valid())
+    // Updates were lost on a symbol's feed; its book is invalid until the next snapshot (on_book with
+    // book.valid()). With several symbols, the invalid book is the gap's.
     virtual void on_gap(Context&) {}
     virtual void on_end(Context&) {}
 };

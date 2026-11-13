@@ -156,6 +156,7 @@ if(BLOCKSPRINT_BUILD_SIM)
             tests/sim/strategies_test.cpp
             tests/sim/golden_test.cpp
             tests/sim/determinism_test.cpp
+            tests/sim/multi_symbol_test.cpp
         )
         target_include_directories(sim_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest)
         target_link_libraries(sim_tests PRIVATE sim)

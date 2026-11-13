@@ -465,17 +465,23 @@ public:
 class Context {   // what a strategy may do and know
 public:
     uint64_t now() const;  const std::string& symbol() const;  const std::string& owner() const;
+    const std::vector<std::string>& symbols() const;                // P6.7: the primary (symbol()) first
     const ObservedBook& book() const;                               // delayed by feed latency
+    const ObservedBook& book(const std::string& symbol) const;      // P6.7
     bool can_trade() const;                                         // false during the warm-up (P3.11)
     OrderId send(Side, OrderType, Price, Quantity, StpPolicy = StpPolicy::CANCEL_MAKER);
+    OrderId send(const std::string& symbol, Side, OrderType, Price, Quantity, StpPolicy = ...);  // P6.7
     void cancel(const OrderId&);
     void amend(const OrderId&, Quantity new_total, std::optional<Price> = std::nullopt);
     void replace(const OrderId&, Price, Quantity);                  // same ID, back of the queue
     const Account& account() const;                                 // fills it has learned of
+    const Account& account(const std::string& symbol) const;        // P6.7
     const std::map<OrderId, OpenOrder>& open_orders() const;        // as it knows them
     uint64_t set_timer(uint64_t delay_ns);  void cancel_timer(uint64_t id);
 };
 ```
+
+The calls without a symbol act on the run's primary symbol, so one-symbol strategies don't change. `cancel`, `amend` and `replace` act on the order's own symbol (`OpenOrder::symbol`); `ObservedBook::symbol()` and `TradeEvent::symbol` (an index in `symbols()`) say which symbol a callback is for (§11.6).
 
 `Context` is abstract so that the live platform can implement it too (L5). `on_reject` was added to the planned callbacks. A refused cancel or amend (the order already filled, an amend breaking a rule) isn't an order event, and reporting it as one would break the execution-report contract (one terminal report per order). Python strategies implement the same callbacks through pybind11 trampolines (Phase 4).
 
@@ -584,6 +590,20 @@ The strategy joins the best ask with 1 lot and cancels when it sees its ask belo
 
 ---
 
+### 11.6 Multi-symbol runs (P6.7)
+
+For pairs, hedging and cross-symbol strategies. Config: `symbol` as a list (`["BTCUSDT", "ETHUSDT"]`, from the dataset's manifest), or `dataset` as a list of `.bse` files; the first symbol is the primary.
+
+- **Simulator:** one engine with every symbol's spec; per symbol a replayer, synthesizer (its own queue-model RNG stream: the primary's keeps the name `queue`, the others are `queue/<SYMBOL>`), impact overlay and permanent impact. Each feed keeps its next batch in the event queue, so batches merge by time; at equal times they go in the order they were queued (deterministic). Fast-forward merges the same way, so the window starts with every book in sync. Batches carry their symbol's index.
+- **Gateway sessions** keep per symbol: the observed book, both accounts (position in that symbol's base asset, cash in its quote), the exchange's open orders and the gap halt (a gap on one symbol halts only it; `flatten` closes only its position). The strategy's open orders are one map with `OpenOrder::symbol`.
+- **Shared per connection, as on Binance:** request weight per minute and orders per 10 s / per day count every symbol's requests; `limits.open_orders` is per symbol.
+- **RiskGuard:** `max_position` per symbol (in its base asset, counting that symbol's open orders), `max_order_notional` per order, `max_open_orders` over all symbols, and the kill switch on the sum of every symbol's PnL at the strategy's marks.
+- **Latency regime** counts every symbol's messages (the connection's load).
+- **Independence:** a strategy that trades only the primary gets exactly the one-symbol run's results with other symbols added (tested on Nov 10 02:00–03:00 with the quoter: the same BTCUSDT account).
+- **Outputs (§12):** every CSV gets a `symbol` column after `owner`; `bbo_samples.csv` and `positions.csv` have a row per symbol per sample. `run_meta.json`'s top-level sections (`data_header`, `synthesizer`, `final_mark`, `simulator.permanent_impact`, each session's accounts) stay the primary's; `symbols` lists every symbol's, each session gets `accounts` per symbol, and `data.symbols` every file. One-symbol runs are unchanged: no column, no `symbols`, the same output hashes.
+- **Python:** `Results.symbols`, a `symbol` column in `to_polars()`, and `Results.for_symbol(name)`: that symbol's rows and metadata in the shape of a one-symbol run. The analytics measure one symbol against its data, so they refuse a multi-symbol run that isn't narrowed. Experiment YAML stays one-symbol for now.
+- **Tests:** `tests/sim/multi_symbol_test.cpp` (merge order, fast-forward, per-symbol orders, accounts and gap halt, the limits, the recorder) and `tests/python/test_multi_symbol.py`: a Python strategy buys BTC every 5 s and hedges each fill with ETH of the same notional, on 30 s of Nov 10 data for both (committed fixtures).
+
 ## 12. Outputs
 
 One directory per run:
@@ -681,7 +701,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   | `binance_spot_home_pc` | 100 µs | lognormal, median 100 ms, σ 0.3, min 40 ms |
 
   The two Binance presets are placeholders until calibration (P7.6). The home PC feed is small because `ts_local` already contains this PC's network delay.
-- **Dataset:** a packed dataset directory (its `manifest.json` gives the symbol's file and SHA-256; `symbol` is required when there are several) or a `.bse` file. The header is validated, and its symbol must match `symbol`.
+- **Dataset:** a packed dataset directory (its `manifest.json` gives the symbol's file and SHA-256; `symbol` is required when there are several) or a `.bse` file. The header is validated, and its symbol must match `symbol`. Several symbols (P6.7, §11.6): `symbol` as a list with a dataset directory, or `dataset` as a list of `.bse` files (with `symbol` a list of as many, or left out); the resolved `symbol` is then the list.
 - **Times:** ns, `"YYYY-MM-DD"` (midnight UTC) or `"YYYY-MM-DDTHH:MM:SS[.fffffffff]Z"`. The resolved config holds them at full ns precision, and it resolves to itself (tested), so a run's `run_meta.json` can be run again as is.
 - **Fee rates** are exact decimal strings (or numbers); negative rates are rebates.
 - **Impact:** `impact.half_life_ms` is τ ≥ 0 (§8.3); 0 is the default. `impact.permanent_coefficient` Y ≥ 0 turns on permanent impact (0, the default, is off); with it, `daily_volatility` (a fraction) and `daily_volume` (base units, a decimal string) must be positive.
@@ -862,6 +882,7 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P6.4 | RiskGuard: position, order notional and open-order limits and a drawdown kill switch, before the latency pipe (§11.2) | done |
 | P6.5 | Gap policies: halt (default), flatten at the resync, continue (§11.2) | done |
 | P6.6 | Permanent impact: square-root mid shift from the strategies' net taken quantity, off by default (§8.3) | done |
+| P6.7 | Multi-symbol runs: several files merged by time, per-symbol books, accounts and halts (§11.6) | done |
 
 ---
 
@@ -937,7 +958,7 @@ CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable
 
 ## 20. Extension points
 
-- **More symbols per run:** one replayer per file merged through the EventQueue; accounts per asset.
+- **Cross-quote accounts:** multi-symbol runs (P6.7) keep cash per symbol in its quote asset; a portfolio across quote assets (e.g. ETHBTC with BTCUSDT) needs conversion.
 - **Live mode (L-phases, [live_platform_architecture.md](live_platform_architecture.md)):** the same synthesizer fed by the WebSocket instead of the replayer turns the live mirror into the backtest's code path, which is the basis of V5.
 - **Market impact models** beyond the overlay and the square-root shift: decaying (transient) permanent impact, impact calibrated from the data.
 

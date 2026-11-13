@@ -15,11 +15,17 @@ empty holds 0 there; the rules are in src/sim/recorder.hpp.
 `to_polars()` gives the CSV tables (docs/simulator_architecture.md section 12): the same columns in the same
 order, with the CSV's strings for enums, owners and order IDs, nulls where the CSV is empty, `*_ns` times as
 UTC datetimes and fixed-point values as exact Decimal(38, 8) (or floats / raw integers on request).
+
+A multi-symbol run (P6.7) has a `symbol` column after `owner` in every table, and `meta["symbols"]`.
+`for_symbol(name)` narrows it to one symbol: the tables' rows of that symbol and its sections of the metadata,
+in the shape of a one-symbol run, which is what the analytics take.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
+
+import copy
 
 import numpy as np
 
@@ -70,6 +76,46 @@ class Results:
         self.bbo_samples: np.ndarray = tables["bbo_samples"]
         self.positions: np.ndarray = tables["positions"]
         self.codes: dict[str, list[str]] = bs.result_codes()
+        # The run's symbols, the primary first
+        if "symbols" in meta:
+            self.symbols: list[str] = [s["symbol"] for s in meta["symbols"]]
+        else:
+            self.symbols = [meta.get("data_header", {}).get("symbol") or meta.get("data", {}).get("symbol", "")]
+
+    @property
+    def multi_symbol(self) -> bool:
+        return len(self.symbols) > 1
+
+    def for_symbol(self, symbol: str) -> Results:
+        """One symbol of a multi-symbol run as a one-symbol run: its rows of every table, and its data file,
+        header, synthesizer, permanent impact, final mark and per-session accounts as the metadata's top-level
+        sections. A one-symbol run returns itself for its own symbol."""
+        if symbol not in self.symbols:
+            raise ValueError(f"unknown symbol {symbol!r}: one of {', '.join(self.symbols)}")
+        if not self.multi_symbol:
+            return self
+        i = self.symbols.index(symbol)
+        meta = copy.deepcopy(self.meta)
+        per = meta.pop("symbols")[i]
+        files = meta["data"].pop("symbols", None)
+        if files is not None:
+            meta["data"] = {**files[i]}
+        meta["data_header"] = per["data_header"]
+        meta["synthesizer"] = per["synthesizer"]
+        meta["final_mark"] = per["final_mark"]
+        meta["simulator"]["permanent_impact"] = per["permanent_impact"]
+        meta["config"]["symbol"] = symbol
+        for session in meta["sessions"]:
+            mine = session.pop("accounts")[symbol]
+            session.update(mine)
+        meta["narrowed_from"] = self.symbols
+        tables: dict[str, Any] = {"owners": self.owners, "order_ids": self.order_ids}
+        for t in TABLES:
+            a = getattr(self, t)
+            tables[t] = a[a["symbol"] == i]
+        keep = self.request_rejects["symbol"] == i
+        tables["reject_texts"] = [x for x, k in zip(self.reject_texts, keep) if k]
+        return Results(meta, tables)
 
     @classmethod
     def from_simulator(cls, sim: bs.Simulator) -> Results:
@@ -120,10 +166,15 @@ class Results:
         a: np.ndarray = getattr(self, table)
         valid = _valid_masks(table, a, self.codes)
         cols: dict[str, pl.Series] = {}
-        for name in _COLUMNS[table]:
+        names = list(_COLUMNS[table])
+        if self.multi_symbol:
+            names.insert(names.index("owner") + 1, "symbol")
+        for name in names:
             mask = valid.get(name)
             if name == "owner":
                 cols[name] = _strings(name, a["owner"], self.owners, a["owner"] != NO_OWNER)
+            elif name == "symbol":
+                cols[name] = _strings(name, a["symbol"], self.symbols, None)
             elif name == "order_id":
                 cols[name] = _strings(name, a["order"], self.order_ids, None)
             elif name == "text":

@@ -4,7 +4,8 @@
 
 namespace sim {
 
-ObservedBook::ObservedBook(int64_t tick_size, int64_t lot_size) : tick_(tick_size), lot_(lot_size) {
+ObservedBook::ObservedBook(int64_t tick_size, int64_t lot_size, std::string symbol, uint32_t index)
+    : tick_(tick_size), lot_(lot_size), symbol_(std::move(symbol)), index_(index) {
     if (tick_size <= 0 || lot_size <= 0) {
         throw std::invalid_argument("ObservedBook needs positive tick and lot sizes");
     }
@@ -24,6 +25,7 @@ void ObservedBook::apply(const Batch& batch, uint64_t seen_at) {
         case BatchKind::TRADE:
             last_trade_ = trade_event(*batch.begin, tick_, lot_);
             last_trade_->price += shift_ * tick_;
+            last_trade_->symbol = index_;
             break;
         case BatchKind::GAP:
             book_.clear();

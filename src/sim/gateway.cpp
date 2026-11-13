@@ -67,26 +67,50 @@ constexpr uint64_t kMinute = 60ULL * 1000000000ULL;
 class SimGateway::Session final : public Context {
 public:
     Session(SimGateway& gw, uint32_t index, Strategy& strategy, SessionConfig cfg)
-        : gw_(gw), index_(index), strategy_(strategy), cfg_(std::move(cfg)), book_(gw.tick_, gw.lot_),
+        : gw_(gw), index_(index), strategy_(strategy), cfg_(std::move(cfg)),
           feed_(*cfg_.feed, stream_rng(gw.seed_, "feed/" + cfg_.owner)),
           entry_(*cfg_.entry, stream_rng(gw.seed_, "entry/" + cfg_.owner)),
           ack_(*cfg_.ack, stream_rng(gw.seed_, "ack/" + cfg_.owner)),
-          risk_(cfg_.risk) {}
+          risk_(cfg_.risk) {
+        legs_.reserve(gw.symbols_.size());
+        for (uint32_t i = 0; i < gw.symbols_.size(); ++i) {
+            const SymbolInfo& s = gw.symbols_[i];
+            legs_.emplace_back(ObservedBook(s.tick_size, s.lot_size, s.name, i));
+        }
+    }
 
     // ---- Context (strategy side) ----
     uint64_t now() const override { return gw_.now(); }
-    const std::string& symbol() const override { return gw_.symbol_; }
+    const std::string& symbol() const override { return gw_.names_[0]; }
+    const std::vector<std::string>& symbols() const override { return gw_.names_; }
     const std::string& owner() const override { return cfg_.owner; }
-    const ObservedBook& book() const override { return book_; }
-    const Account& account() const override { return known_account_; }
+    const ObservedBook& book() const override { return legs_[0].book; }
+    const ObservedBook& book(const std::string& symbol) const override {
+        return legs_[gw_.symbol_index(symbol)].book;
+    }
+    const Account& account() const override { return legs_[0].known; }
+    const Account& account(const std::string& symbol) const override {
+        return legs_[gw_.symbol_index(symbol)].known;
+    }
     const std::map<OrderId, OpenOrder>& open_orders() const override { return known_orders_; }
     bool can_trade() const override { return now() >= gw_.trading_from_; }
 
     OrderId send(Side side, OrderType type, Price price, Quantity quantity, StpPolicy stp) override {
+        return send_on(0, side, type, price, quantity, stp);
+    }
+
+    OrderId send(const std::string& symbol, Side side, OrderType type, Price price, Quantity quantity,
+                 StpPolicy stp) override {
+        return send_on(gw_.symbol_index(symbol), side, type, price, quantity, stp);
+    }
+
+    OrderId send_on(uint32_t sym, Side side, OrderType type, Price price, Quantity quantity, StpPolicy stp) {
         require_trading("send");
+        Leg& leg = legs_[sym];
         Request r;
         r.type = Request::Type::NEW;
         r.order_id = cfg_.owner + "-" + std::to_string(++order_seq_);
+        r.symbol = sym;
         r.side = side;
         r.order_type = type;
         r.price = price;
@@ -94,13 +118,14 @@ public:
         r.stp = stp;
         // Checked against the strategy's other orders, before this one joins them
         RiskVerdict verdict;
-        if (halted_) {
+        if (leg.halted) {
             verdict = halt_verdict();
         } else if (risk_.limits().any() && !flattening_) {
-            verdict = risk_.check_order(side, type, price, quantity, known_account_, known_orders_, book_);
+            verdict = risk_.check_order(side, type, price, quantity, leg.known, known_orders_, leg.book);
         }
         OpenOrder& o = known_orders_[r.order_id];
         o.id = r.order_id;
+        o.symbol = gw_.names_[sym];
         o.side = side;
         o.type = type;
         o.price = price;
@@ -111,7 +136,7 @@ public:
         ++stats_.orders_sent;
         OrderId id = r.order_id;
         if (!verdict.ok()) {
-            ++(halted_ ? stats_.gap_rejects : stats_.risk_rejects);
+            ++(leg.halted ? stats_.gap_rejects : stats_.risk_rejects);
             r.sent_at = now();
             if (gw_.listener_) gw_.listener_->on_request(index_, r, r.sent_at);
             reject_order(r, verdict.reason, verdict.text, true);
@@ -121,9 +146,11 @@ public:
         return id;
     }
 
-    // Side and type of the order a cancel / amend / replace is for (for the exchange and the listener)
+    // Symbol, side and type of the order a cancel / amend / replace is for (for the exchange and the
+    // listener); an order the strategy doesn't know is taken to be on the primary symbol
     void describe(Request& r) const {
         if (auto it = known_orders_.find(r.order_id); it != known_orders_.end()) {
+            r.symbol = gw_.symbol_index(it->second.symbol);
             r.side = it->second.side;
             r.order_type = it->second.type;
         }
@@ -149,17 +176,18 @@ public:
         r.quantity = new_total;
         r.new_price = new_price;
         ++stats_.amends_sent;
-        if (halted_ || risk_.limits().any()) {
+        const Leg& leg = legs_[r.symbol];
+        if (leg.halted || risk_.limits().any()) {
             if (auto it = known_orders_.find(id); it != known_orders_.end()) {
                 const OpenOrder& o = it->second;
                 const Quantity leaves = new_total - o.filled;
                 if (leaves > o.leaves || (new_price && *new_price != o.price)) {
-                    if (halted_) {
+                    if (leg.halted) {
                         refuse(r, RequestReject::Request::AMEND, halt_verdict());
                         return;
                     }
                     const RiskVerdict v = risk_.check_order(o.side, o.type, new_price.value_or(o.price), leaves,
-                                                            known_account_, known_orders_, book_, &id);
+                                                            leg.known, known_orders_, leg.book, &id);
                     if (!v.ok()) {
                         refuse(r, RequestReject::Request::AMEND, v);
                         return;
@@ -180,13 +208,14 @@ public:
         describe(r);
         r.stp = StpPolicy::CANCEL_MAKER;
         ++stats_.replaces_sent;
-        if (halted_ && known_orders_.count(id)) {
+        const Leg& leg = legs_[r.symbol];
+        if (leg.halted && known_orders_.count(id)) {
             refuse(r, RequestReject::Request::REPLACE, halt_verdict());
             return;
         }
         if (risk_.limits().any() && known_orders_.count(id)) {
-            const RiskVerdict v = risk_.check_order(r.side, r.order_type, price, quantity, known_account_,
-                                                    known_orders_, book_, &id);
+            const RiskVerdict v = risk_.check_order(r.side, r.order_type, price, quantity, leg.known, known_orders_,
+                                                    leg.book, &id);
             if (!v.ok()) {
                 refuse(r, RequestReject::Request::REPLACE, v);
                 return;
@@ -207,23 +236,24 @@ public:
     // ---- deliveries (strategy side, at the event's time) ----
     void deliver_md(const Batch& batch) {
         ++stats_.md_batches;
-        book_.apply(batch, now());
+        Leg& leg = legs_[batch.symbol];
+        leg.book.apply(batch, now());
         if (batch.kind == BatchKind::GAP) {
-            on_feed_gap();
-        } else if (halted_ && book_.valid()) {
-            resume();
+            on_feed_gap(batch.symbol);
+        } else if (leg.halted && leg.book.valid()) {
+            resume(batch.symbol);
         }
         check_drawdown();
         switch (batch.kind) {
             case BatchKind::TRADE:
-                strategy_.on_trade(*this, *book_.last_trade());
+                strategy_.on_trade(*this, *leg.book.last_trade());
                 break;
             case BatchKind::GAP:
                 strategy_.on_gap(*this);
                 break;
             case BatchKind::DEPTH:
             case BatchKind::SNAPSHOT:
-                strategy_.on_book(*this, book_);
+                strategy_.on_book(*this, leg.book);
                 break;
         }
     }
@@ -242,6 +272,7 @@ public:
             case ExecType::AMENDED: {
                 OpenOrder& o = known_orders_[r.order_id];
                 o.id = r.order_id;
+                o.symbol = r.symbol;
                 o.side = r.side;
                 o.type = r.order_type;
                 o.price = r.price;
@@ -252,7 +283,7 @@ public:
                 break;
             }
             case ExecType::FILL:
-                known_account_.apply_fill(r);
+                legs_[gw_.symbol_index(r.symbol)].known.apply_fill(r);
                 fill_seen = true;
                 if (it != known_orders_.end()) {
                     if (r.leaves_qty == 0) {
@@ -302,11 +333,13 @@ public:
                         SimEvent{index_, batch});
     }
 
-    void observe(const Batch& batch) { book_.apply(batch, now()); }
+    void observe(const Batch& batch) { legs_[batch.symbol].book.apply(batch, now()); }
 
     // ---- exchange side ----
     void arrive(const Request& r) {
         const uint64_t t = now();
+        Leg& leg = legs_[r.symbol];
+        const std::string& symbol = gw_.names_[r.symbol];
         if (!check_weight(r, t)) {
             ++stats_.weight_limited;
             const std::string text = "Too much request weight used; current limit is " +
@@ -314,13 +347,13 @@ public:
             switch (r.type) {
                 case Request::Type::NEW: reject_order(r, ExecReason::RATE_LIMIT, text); break;
                 case Request::Type::CANCEL:
-                    reject_request(RequestReject::Request::CANCEL, r.order_id, ExecReason::RATE_LIMIT, text);
+                    reject_request(RequestReject::Request::CANCEL, r, ExecReason::RATE_LIMIT, text);
                     break;
                 case Request::Type::AMEND:
-                    reject_request(RequestReject::Request::AMEND, r.order_id, ExecReason::RATE_LIMIT, text);
+                    reject_request(RequestReject::Request::AMEND, r, ExecReason::RATE_LIMIT, text);
                     break;
                 case Request::Type::REPLACE:
-                    reject_request(RequestReject::Request::REPLACE, r.order_id, ExecReason::RATE_LIMIT, text);
+                    reject_request(RequestReject::Request::REPLACE, r, ExecReason::RATE_LIMIT, text);
                     break;
             }
             return;
@@ -333,17 +366,16 @@ public:
                     if (r.type == Request::Type::NEW) {
                         reject_order(r, *reason, "Too many orders: " + rate_text());
                     } else {
-                        reject_request(RequestReject::Request::REPLACE, r.order_id, *reason, "Too many orders: " +
-                                                                                                  rate_text());
+                        reject_request(RequestReject::Request::REPLACE, r, *reason, "Too many orders: " + rate_text());
                     }
                     return;
                 }
-                if (r.type == Request::Type::REPLACE && !exchange_open_.count(r.order_id)) {
-                    reject_request(RequestReject::Request::REPLACE, r.order_id, ExecReason::NONE, "Order is not open");
+                if (r.type == Request::Type::REPLACE && !leg.exchange_open.count(r.order_id)) {
+                    reject_request(RequestReject::Request::REPLACE, r, ExecReason::NONE, "Order is not open");
                     return;
                 }
                 if (r.type == Request::Type::NEW && cfg_.limits.max_open_orders &&
-                    exchange_open_.size() >= cfg_.limits.max_open_orders) {
+                    leg.exchange_open.size() >= cfg_.limits.max_open_orders) {
                     ++stats_.open_limited;
                     reject_order(r, ExecReason::MAX_OPEN_ORDERS,
                                  "Maximum of " + std::to_string(cfg_.limits.max_open_orders) + " open orders reached");
@@ -351,7 +383,7 @@ public:
                 }
                 auto order = std::make_shared<Order>();
                 order->order_id = r.order_id;
-                order->symbol = gw_.symbol_;
+                order->symbol = symbol;
                 order->order_type = r.order_type;
                 order->side = r.side;
                 order->price = r.price;
@@ -367,18 +399,18 @@ public:
                 return;
             }
             case Request::Type::CANCEL:
-                if (!gw_.engine_.cancel_order(gw_.symbol_, r.order_id)) {
-                    reject_request(RequestReject::Request::CANCEL, r.order_id, ExecReason::NONE, "Order is not open");
+                if (!gw_.engine_.cancel_order(symbol, r.order_id)) {
+                    reject_request(RequestReject::Request::CANCEL, r, ExecReason::NONE, "Order is not open");
                 }
                 return;
             case Request::Type::AMEND: {
-                if (!exchange_open_.count(r.order_id)) {
-                    reject_request(RequestReject::Request::AMEND, r.order_id, ExecReason::NONE, "Order is not open");
+                if (!leg.exchange_open.count(r.order_id)) {
+                    reject_request(RequestReject::Request::AMEND, r, ExecReason::NONE, "Order is not open");
                     return;
                 }
                 std::vector<Trade> trades;
-                amending_ = &r.order_id;
-                gw_.engine_.amend_order(gw_.symbol_, r.order_id, r.quantity, r.new_price, trades);
+                amending_ = &r;
+                gw_.engine_.amend_order(symbol, r.order_id, r.quantity, r.new_price, trades);
                 amending_ = nullptr;
                 if (gw_.taker_trades_ && !trades.empty()) {
                     gw_.taker_trades_(trades);
@@ -390,55 +422,87 @@ public:
 
     // A report from the engine for one of this session's orders, at exchange time
     void exchange_report(const ExecReport& r) {
-        if (amending_ && r.type == ExecType::REJECTED && r.order_id == *amending_) {
+        if (amending_ && r.type == ExecType::REJECTED && r.order_id == amending_->order_id) {
             // The engine refused an amend: the order is unchanged. Tell the strategy as a request reject.
-            reject_request(RequestReject::Request::AMEND, r.order_id, r.reason, r.text);
+            reject_request(RequestReject::Request::AMEND, *amending_, r.reason, r.text);
             return;
         }
+        Leg& leg = legs_[gw_.symbol_index(r.symbol)];
         if (is_terminal(r)) {
-            exchange_open_.erase(r.order_id);
+            leg.exchange_open.erase(r.order_id);
         } else {
-            exchange_open_.insert(r.order_id);
+            leg.exchange_open.insert(r.order_id);
         }
         if (r.type == ExecType::FILL) {
-            exchange_account_.apply_fill(r);
+            leg.exchange.apply_fill(r);
         }
         to_strategy(r);
     }
 
     Strategy& strategy() { return strategy_; }
-    const Account& exchange_account() const { return exchange_account_; }
-    size_t exchange_open_orders() const { return exchange_open_.size(); }
+    const Account& exchange_account(uint32_t sym) const { return legs_.at(sym).exchange; }
+    const Account& strategy_account(uint32_t sym) const { return legs_.at(sym).known; }
+    size_t exchange_open_orders() const {
+        size_t n = 0;
+        for (const Leg& l : legs_) n += l.exchange_open.size();
+        return n;
+    }
+    size_t exchange_open_orders(uint32_t sym) const { return legs_.at(sym).exchange_open.size(); }
     SessionStats stats() const {
         SessionStats s = stats_;
-        if (halted_) s.halted_ns += now() - halted_since_;
+        for (const Leg& l : legs_) {
+            if (l.halted) s.halted_ns += now() - l.halted_since;
+        }
         s.held_back = feed_.held_back() + entry_.held_back() + ack_.held_back();
         return s;
     }
 
 private:
+    // What the session keeps per symbol
+    struct Leg {
+        explicit Leg(ObservedBook b) : book(std::move(b)) {}
+        ObservedBook book;
+        Account known;     // as the strategy knows it
+        Account exchange;  // as the exchange knows it
+        std::unordered_set<OrderId> exchange_open;
+        bool halted = false;  // gap policy: waiting for a snapshot
+        uint64_t halted_since = 0;
+    };
+
     // A request the RiskGuard refused: recorded as sent, refused at once (no latency)
     void refuse(Request& r, RequestReject::Request kind, const RiskVerdict& v) {
         ++(v.reason == ExecReason::GAP_HALTED ? stats_.gap_rejects : stats_.risk_rejects);
         r.sent_at = now();
         if (gw_.listener_) gw_.listener_->on_request(index_, r, r.sent_at);
-        reject_request(kind, r.order_id, v.reason, v.text, true);
+        reject_request(kind, r, v.reason, v.text, true);
     }
 
-    // The drawdown kill switch: on tripping, cancel every open order
+    // The drawdown kill switch, on the PnL of every symbol at the strategy's marks: on tripping, cancel
+    // every open order
     void check_drawdown() {
         if (!risk_.limits().max_drawdown || !can_trade()) return;
-        if (risk_.update(known_account_, book_, now())) {
+        int64_t pnl = 0;
+        for (const Leg& l : legs_) {
+            if (l.known.position == 0) {
+                pnl += l.known.cash - l.known.fees;
+                continue;
+            }
+            const auto m = RiskGuard::mark(l.book);
+            if (!m) return;  // a position that can't be marked yet
+            pnl += l.known.pnl(*m);
+        }
+        if (risk_.update(pnl, now())) {
             stats_.risk_killed_at = risk_.killed_at();
-            cancel_all();
+            cancel_all(nullptr);
         }
         stats_.max_drawdown = risk_.max_drawdown_seen();
     }
 
-    void cancel_all() {
+    // Every open order not already being cancelled; with a symbol, that symbol's only
+    void cancel_all(const std::string* symbol) {
         std::vector<OrderId> ids;
         for (const auto& [id, o] : known_orders_) {
-            if (o.status != OrderStatus::PENDING_CANCEL) ids.push_back(id);
+            if (o.status != OrderStatus::PENDING_CANCEL && (!symbol || o.symbol == *symbol)) ids.push_back(id);
         }
         for (const auto& id : ids) cancel(id);
     }
@@ -447,25 +511,28 @@ private:
         return RiskVerdict{ExecReason::GAP_HALTED, "trading halted: market data gap, waiting for a snapshot"};
     }
 
-    // The strategy's feed lost updates: halt until a snapshot makes its book valid again
-    void on_feed_gap() {
+    // A symbol's feed lost updates: halt it until a snapshot makes its book valid again
+    void on_feed_gap(uint32_t sym) {
         if (cfg_.gap == GapPolicy::CONTINUE) return;
-        if (!halted_) {
-            halted_ = true;
-            halted_since_ = now();
+        Leg& leg = legs_[sym];
+        if (!leg.halted) {
+            leg.halted = true;
+            leg.halted_since = now();
             ++stats_.gap_halts;
         }
-        if (can_trade()) cancel_all();
+        if (can_trade()) cancel_all(&gw_.names_[sym]);
     }
 
-    // The book is valid again: lift the halt; under flatten, first close the position at market
-    void resume() {
-        halted_ = false;
-        stats_.halted_ns += now() - halted_since_;
-        const Quantity pos = known_account_.position;
+    // The symbol's book is valid again: lift the halt; under flatten, first close its position at market
+    void resume(uint32_t sym) {
+        Leg& leg = legs_[sym];
+        leg.halted = false;
+        stats_.halted_ns += now() - leg.halted_since;
+        const Quantity pos = leg.known.position;
         if (cfg_.gap != GapPolicy::FLATTEN || pos == 0 || !can_trade()) return;
         flattening_ = true;  // the risk system's own order: the RiskGuard doesn't check it
-        send(pos > 0 ? Side::SELL : Side::BUY, OrderType::MARKET, 0, pos > 0 ? pos : -pos, StpPolicy::CANCEL_MAKER);
+        send_on(sym, pos > 0 ? Side::SELL : Side::BUY, OrderType::MARKET, 0, pos > 0 ? pos : -pos,
+                StpPolicy::CANCEL_MAKER);
         flattening_ = false;
         ++stats_.flatten_orders;
     }
@@ -493,7 +560,7 @@ private:
         gw_.queue_.push(arrive, EventClass::ORDER_ARRIVE, SimEvent{index_, std::move(r)});
     }
 
-    // local: refused by the RiskGuard, delivered now without latency
+    // local: refused before the latency pipe (RiskGuard, gap halt), delivered now without latency
     void to_strategy(const ExecReport& r, bool local = false) {
         const uint64_t deliver = local ? now() : ack_.arrival(now(), gw_.latency_scale(Channel::ACK));
         if (gw_.listener_) {
@@ -502,11 +569,12 @@ private:
         gw_.queue_.push(deliver, EventClass::STRATEGY_EXEC, SimEvent{index_, r});
     }
 
-    void reject_request(RequestReject::Request request, const OrderId& id, ExecReason reason, std::string text,
+    void reject_request(RequestReject::Request request, const Request& r, ExecReason reason, std::string text,
                         bool local = false) {
         RequestReject rr;
         rr.request = request;
-        rr.order_id = id;
+        rr.order_id = r.order_id;
+        rr.symbol = gw_.names_[r.symbol];
         rr.reason = reason;
         rr.text = std::move(text);
         rr.exchange_time = now();
@@ -527,7 +595,7 @@ private:
         rep.text = std::move(text);
         rep.order_id = r.order_id;
         rep.owner_id = cfg_.owner;
-        rep.symbol = gw_.symbol_;
+        rep.symbol = gw_.names_[r.symbol];
         rep.side = r.side;
         rep.order_type = r.order_type;
         rep.price = r.price;
@@ -582,42 +650,63 @@ private:
     uint32_t index_;
     Strategy& strategy_;
     SessionConfig cfg_;
-    ObservedBook book_;
     LatencyChannel feed_;
     LatencyChannel entry_;
     LatencyChannel ack_;
+    std::vector<Leg> legs_;  // per symbol, the primary first
 
-    // What the strategy knows
-    Account known_account_;
+    // What the strategy knows (besides its books and accounts)
     std::map<OrderId, OpenOrder> known_orders_;
     uint64_t order_seq_ = 0;
     uint64_t timer_seq_ = 0;
     std::unordered_set<uint64_t> cancelled_timers_;
 
-    // What the exchange knows
-    Account exchange_account_;
-    std::unordered_set<OrderId> exchange_open_;
+    // What the exchange knows (besides the accounts and open orders per symbol); the request limits are
+    // the connection's
     std::deque<uint64_t> recent_;  // arrival times of orders in the last 10 s
     uint64_t day_ = 0;
     uint64_t today_ = 0;
     uint64_t minute_ = 0;
     uint64_t weight_used_ = 0;  // request weight charged in the current minute
-    const OrderId* amending_ = nullptr;  // the order of an amend being processed
+    const Request* amending_ = nullptr;  // the amend being processed
 
     RiskGuard risk_;
-    bool flattening_ = false;  // sending the flatten order
-    bool halted_ = false;      // gap policy: waiting for a snapshot
-    uint64_t halted_since_ = 0;
+    bool flattening_ = false;  // sending a flatten order
     SessionStats stats_;
 };
 
 SimGateway::SimGateway(MatchingEngine& engine, SimQueue& queue, std::string symbol, int64_t tick_size,
                        int64_t lot_size, uint64_t seed)
-    : engine_(engine), queue_(queue), symbol_(std::move(symbol)), tick_(tick_size), lot_(lot_size), seed_(seed) {
+    : SimGateway(engine, queue, std::vector<SymbolInfo>{SymbolInfo{std::move(symbol), tick_size, lot_size}}, seed) {}
+
+SimGateway::SimGateway(MatchingEngine& engine, SimQueue& queue, std::vector<SymbolInfo> symbols, uint64_t seed)
+    : engine_(engine), queue_(queue), symbols_(std::move(symbols)), seed_(seed) {
+    if (symbols_.empty()) {
+        throw std::invalid_argument("SimGateway needs at least one symbol");
+    }
+    for (uint32_t i = 0; i < symbols_.size(); ++i) {
+        const SymbolInfo& s = symbols_[i];
+        if (s.tick_size <= 0 || s.lot_size <= 0) {
+            throw std::invalid_argument("SimGateway: symbol '" + s.name + "' needs positive tick and lot sizes");
+        }
+        if (!by_symbol_.emplace(s.name, i).second) {
+            throw std::invalid_argument("SimGateway: duplicate symbol '" + s.name + "'");
+        }
+        names_.push_back(s.name);
+    }
     engine_.register_exec_report_callback([this](const ExecReport& r) { on_engine_report(r); });
 }
 
 SimGateway::~SimGateway() { engine_.register_exec_report_callback(nullptr); }
+
+uint32_t SimGateway::symbol_index(const std::string& name) const {
+    if (symbols_.size() == 1 && name == names_[0]) return 0;
+    auto it = by_symbol_.find(name);
+    if (it == by_symbol_.end()) {
+        throw std::invalid_argument("unknown symbol '" + name + "'");
+    }
+    return it->second;
+}
 
 uint32_t SimGateway::add_session(Strategy& strategy, SessionConfig config) {
     if (config.owner.empty() || config.owner == "MARKET" || config.owner == "MARKET_TAPE") {
@@ -666,6 +755,9 @@ double SimGateway::latency_scale(Channel channel) {
 }
 
 void SimGateway::publish(const Batch& batch) {
+    if (batch.symbol >= symbols_.size()) {
+        throw std::invalid_argument("SimGateway::publish: symbol index out of range");
+    }
     count_messages(batch);
     for (auto& s : sessions_) {
         s->publish(batch);
@@ -673,6 +765,9 @@ void SimGateway::publish(const Batch& batch) {
 }
 
 void SimGateway::observe(const Batch& batch) {
+    if (batch.symbol >= symbols_.size()) {
+        throw std::invalid_argument("SimGateway::observe: symbol index out of range");
+    }
     count_messages(batch);
     for (auto& s : sessions_) {
         s->observe(batch);
@@ -715,9 +810,13 @@ void SimGateway::on_engine_report(const ExecReport& r) {
     }
 }
 
-const Account& SimGateway::exchange_account(uint32_t session) const { return sessions_.at(session)->exchange_account(); }
+const Account& SimGateway::exchange_account(uint32_t session, uint32_t symbol) const {
+    return sessions_.at(session)->exchange_account(symbol);
+}
 
-const Account& SimGateway::strategy_account(uint32_t session) const { return sessions_.at(session)->account(); }
+const Account& SimGateway::strategy_account(uint32_t session, uint32_t symbol) const {
+    return sessions_.at(session)->strategy_account(symbol);
+}
 
 SessionStats SimGateway::stats(uint32_t session) const { return sessions_.at(session)->stats(); }
 
@@ -728,5 +827,9 @@ const std::string& SimGateway::owner(uint32_t session) const { return sessions_.
 const Strategy& SimGateway::strategy(uint32_t session) const { return sessions_.at(session)->strategy(); }
 
 size_t SimGateway::exchange_open_orders(uint32_t session) const { return sessions_.at(session)->exchange_open_orders(); }
+
+size_t SimGateway::exchange_open_orders(uint32_t session, uint32_t symbol) const {
+    return sessions_.at(session)->exchange_open_orders(symbol);
+}
 
 } // namespace sim

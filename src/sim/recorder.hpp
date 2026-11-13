@@ -32,6 +32,7 @@ namespace sim {
 // The CSV rows in memory (P4.5), for Python: fixed-width records that numpy views without a copy. Values are
 // the CSV's in raw units: times in ns, prices, quantities and money in 1e-8, enums as their C++ codes.
 // Strings are interned: `owner` indexes ResultTables::owners, `order` indexes ResultTables::order_ids.
+// `symbol` indexes the run's symbols (P6.7; always 0 with one symbol, whose CSVs have no symbol column).
 // A field the CSV leaves empty holds 0 (the rule is given per field).
 struct OrderRow {
     uint64_t sent_ns, arrive_ns;
@@ -39,7 +40,8 @@ struct OrderRow {
     uint8_t request;                  // Request::Type
     uint8_t side, order_type, stp;    // NEW / REPLACE only
     uint8_t has_new_price;            // AMEND with a new price
-    uint8_t pad_[3];
+    uint8_t symbol;
+    uint8_t pad_[2];
     int64_t price;                    // NEW / REPLACE only
     int64_t quantity;                 // NEW / REPLACE / AMEND (the new total)
     int64_t new_price;                // has_new_price only
@@ -50,7 +52,8 @@ struct ReportRow {
     uint32_t owner, order;
     uint8_t type, reason, side, order_type;  // reason: empty when NONE
     uint8_t liquidity;                       // FILL only
-    uint8_t pad_[7];
+    uint8_t symbol;
+    uint8_t pad_[6];
     int64_t price, quantity;
     int64_t last_px, last_qty;               // FILL only
     int64_t cum_qty, leaves_qty;
@@ -63,13 +66,14 @@ struct RejectRow {
     uint32_t owner, order;
     uint8_t request;                 // RequestReject::Request
     uint8_t reason;                  // empty when NONE
-    uint8_t pad_[6];
+    uint8_t symbol;
+    uint8_t pad_[5];
 };
 
 struct BboRow {
     uint64_t ts_ns;
     uint32_t owner;                  // kNoOwner: a run without strategies
-    uint32_t pad_;
+    uint32_t symbol;
     // A side with price 0 has no level (both columns empty)
     int64_t data_bid, data_bid_qty, data_ask, data_ask_qty;
     int64_t book_bid, book_bid_qty, book_ask, book_ask_qty;
@@ -79,7 +83,7 @@ struct BboRow {
 
 struct PositionRow {
     uint64_t ts_ns;
-    uint32_t owner, pad_;
+    uint32_t owner, symbol;
     int64_t position, cash, fees, mark, pnl;
     uint64_t fills, maker_fills, taker_fills, open_orders;
     int64_t base_volume, quote_volume;
@@ -136,7 +140,9 @@ private:
 
     void sample(uint64_t t);
     void write_positions(uint64_t t);
-    Price mark();  // the data's mid; else the engine book's; else the last one
+    Price mark(size_t symbol);  // the data's mid; else the engine book's; else the last one
+    // ",<symbol>" after the owner column in a multi-symbol run; nothing with one symbol
+    std::string symbol_col(size_t symbol) const;
     std::ofstream& row(Output& o) {
         ++o.rows;
         return o.out;
@@ -150,7 +156,8 @@ private:
     Output bbo_{"bbo_samples.csv", {}, 0};
     Output positions_{"positions.csv", {}, 0};
     std::shared_ptr<ResultTables> tables_;
-    Price last_mark_ = 0;
+    bool multi_ = false;             // several symbols
+    std::vector<Price> last_mark_;   // per symbol
     bool finished_ = false;
     std::string output_hash_;
 };

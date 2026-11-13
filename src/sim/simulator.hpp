@@ -1,6 +1,8 @@
 #pragma once
 // Simulator (P3.11, architecture §5.3): the event loop over one .bse file, the synthesizer, the engine and
-// the gateway.
+// the gateway. Several files (P6.7, one symbol each, the primary first): one engine, a replayer, synthesizer
+// and impact models per symbol, their batches merged by time (at equal times, in the order they were
+// queued: deterministic).
 //
 //   fast-forward  data before the window's start goes to the synthesizer (the engine's book) and straight
 //                 into the strategies' observed books, with no latency and no callbacks: the run starts with
@@ -12,7 +14,7 @@
 //                 (ctx.can_trade() is false and requests throw)
 //
 // Data timestamps that go backwards (rare in the recorder's ts_local) are clamped to the last data time, so
-// simulation time never decreases.
+// simulation time never decreases. With several files that is the last data time of any of them.
 #include "event_queue.hpp"
 #include "gateway.hpp"
 #include "queue_models.hpp"
@@ -28,6 +30,8 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace sim {
 
@@ -61,6 +65,9 @@ public:
     // Opens the file and builds the engine (symbol spec from the file's header), the queue model and the
     // synthesizer. Throws std::invalid_argument on a bad window or queue model.
     Simulator(const std::string& bse_path, SimulatorOptions options);
+    // Several symbols, one file each, the primary first; throws std::invalid_argument on none or two files of
+    // one symbol
+    Simulator(const std::vector<std::string>& bse_paths, SimulatorOptions options);
     Simulator(const Simulator&) = delete;
     Simulator& operator=(const Simulator&) = delete;
 
@@ -75,26 +82,37 @@ public:
     void run();
 
     const SimStats& stats() const { return stats_; }
-    const bse::Header& header() const { return replayer_.header(); }
+    // Without an index, the primary symbol's
+    const bse::Header& header(size_t symbol = 0) const { return feeds_.at(symbol)->replayer.header(); }
+    size_t symbol_count() const { return feeds_.size(); }
     const SimulatorOptions& options() const { return options_; }
     MatchingEngine& engine() { return *engine_; }
     SimGateway& gateway() { return *gateway_; }
-    const Synthesizer& synthesizer() const { return *synth_; }
-    const PermanentImpact& permanent_impact() const { return *permanent_; }
+    const Synthesizer& synthesizer(size_t symbol = 0) const { return *feeds_.at(symbol)->synth; }
+    const PermanentImpact& permanent_impact(size_t symbol = 0) const { return *feeds_.at(symbol)->permanent; }
     uint64_t now() const { return clock_->now_ns(); }
 
 private:
     void sample_until(uint64_t t);  // fires the samples due at or before t
     void strategy_trades(const std::vector<Trade>& trades);  // impact overlay and permanent impact
 
+    // One symbol's data and what turns it into the engine's book
+    struct Feed {
+        Feed(const std::string& path, Rng queue_rng) : replayer(path), queue_rng(queue_rng) {}
+        Replayer replayer;
+        Rng queue_rng;
+        std::unique_ptr<Synthesizer> synth;
+        std::unique_ptr<PermanentImpact> permanent;
+        Batch next{};
+        bool have = false;
+    };
+
     SimulatorOptions options_;
-    Replayer replayer_;
     std::shared_ptr<SimClock> clock_;
     std::unique_ptr<MatchingEngine> engine_;
     std::unique_ptr<QueueModel> model_;
-    Rng queue_rng_;
-    std::unique_ptr<Synthesizer> synth_;
-    std::unique_ptr<PermanentImpact> permanent_;
+    std::vector<std::unique_ptr<Feed>> feeds_;
+    std::unordered_map<std::string, size_t> by_symbol_;
     SimQueue queue_;
     std::unique_ptr<SimGateway> gateway_;
 
