@@ -1,3 +1,4 @@
+import argparse
 import urllib.request
 import json
 import sys
@@ -79,13 +80,29 @@ def predict_matching_trades(side, order_type, price, quantity, depth):
         
     return trades, False
 
-def run_interactive_test():
+def by_level(trades):
+    """Total quantity per price. With connector v2 (P7.2) a price level is a FIFO queue of synthetic orders
+    (the market's own queue), so one taker order makes one trade per order it meets, several at one price;
+    the depth endpoint shows the level's total, which is what the prediction can know."""
+    levels = {}
+    for t in trades:
+        key = round(t["price"], 8)
+        levels[key] = levels.get(key, 0.0) + t["quantity"]
+    return sorted(levels.items())
+
+
+def ask(prompt, given):
+    return given if given is not None else input(prompt)
+
+
+def run_interactive_test(args=None):
+    args = args or argparse.Namespace(symbol=None, side=None, type=None, price=None, qty=None)
     print("==================================================")
     print("      BlockSprint Interactive Trade Validator     ")
     print("==================================================")
     
     # 1. Ask for symbol
-    symbol = input("Enter Symbol (default: BTC-USDT): ").strip().upper()
+    symbol = ask("Enter Symbol (default: BTC-USDT): ", args.symbol).strip().upper()
     if not symbol:
         symbol = "BTC-USDT"
         
@@ -97,26 +114,26 @@ def run_interactive_test():
     print("--------------------------------------------------")
     
     # 2. Get order details
-    side = input("Enter Order Side (BUY/SELL): ").strip().lower()
+    side = ask("Enter Order Side (BUY/SELL): ", args.side).strip().lower()
     if side not in ("buy", "sell"):
         print("[Error] Invalid side. Must be BUY or SELL.")
         return
         
-    order_type = input("Enter Order Type (limit/market/ioc/fok): ").strip().lower()
+    order_type = ask("Enter Order Type (limit/market/ioc/fok): ", args.type).strip().lower()
     if order_type not in ("limit", "market", "ioc", "fok"):
         print("[Error] Invalid order type.")
         return
         
     price = 0.0
     if order_type != "market":
-        price_input = input("Enter Limit Price: ").strip()
+        price_input = ask("Enter Limit Price: ", args.price).strip()
         try:
             price = float(price_input)
         except ValueError:
             print("[Error] Invalid price.")
             return
             
-    qty_input = input("Enter Quantity: ").strip()
+    qty_input = ask("Enter Quantity: ", args.qty).strip()
     try:
         qty = float(qty_input)
     except ValueError:
@@ -168,20 +185,12 @@ def run_interactive_test():
     for t in actual_trades:
         print(f"  Price: {t['price']:.6f} | Qty: {t['quantity']:.6f}")
         
-    # Check if expected and actual trades match
-    match_ok = True
-    if len(expected_trades) != len(actual_trades):
-        match_ok = False
-    else:
-        # Sort by price and qty to ensure exact match regardless of output order
-        expected_sorted = sorted(expected_trades, key=lambda x: (x["price"], x["quantity"]))
-        actual_sorted = sorted(actual_trades, key=lambda x: (x["price"], x["quantity"]))
-        for i in range(len(expected_sorted)):
-            # Use small delta for floating point equality
-            if abs(expected_sorted[i]["price"] - actual_sorted[i]["price"]) > 1e-6 or \
-               abs(expected_sorted[i]["quantity"] - actual_sorted[i]["quantity"]) > 1e-6:
-                match_ok = False
-                break
+    # Check if expected and actual trades match, level by level (a level's queue can fill in several trades)
+    expected_levels = by_level(expected_trades)
+    actual_levels = by_level(actual_trades)
+    match_ok = len(expected_levels) == len(actual_levels) and all(
+        abs(ep - ap) <= 1e-6 and abs(eq - aq) <= 1e-6
+        for (ep, eq), (ap, aq) in zip(expected_levels, actual_levels))
                 
     print("\n---------------------------------------------------------")
     if match_ok:
@@ -189,9 +198,17 @@ def run_interactive_test():
     else:
         print("\033[91m[FAIL] Mismatch Detected: Engine output deviated from rules!\033[0m")
     print("=========================================================")
+    return match_ok
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Predicts an order's fills from the live depth and checks the engine's")
+    parser.add_argument("--symbol")
+    parser.add_argument("--side", help="buy or sell")
+    parser.add_argument("--type", help="limit, market, ioc or fok")
+    parser.add_argument("--price")
+    parser.add_argument("--qty")
     try:
-        run_interactive_test()
+        ok = run_interactive_test(parser.parse_args())
+        sys.exit(0 if ok else 1)
     except KeyboardInterrupt:
         print("\nExiting interactive validator.")

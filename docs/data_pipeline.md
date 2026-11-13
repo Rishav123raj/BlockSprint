@@ -101,7 +101,7 @@ Speed on the development laptop: a full BTCUSDT day (~40 M book rows) takes a fe
 
 ### What the normalizer does
 
-- **Book sync (Binance's rules):** depth events are buffered until a REST snapshot arrives. Events with `u <= lastUpdateId` are dropped, and the first one kept must satisfy `U <= lastUpdateId + 1`. After that, each event must continue the previous one (`U <= prev_u + 1 <= u`).
+- **Book sync (Binance's rules, `research/data/binance_sync.py`, shared with the live feed bridge since P7.2):** depth events are buffered until a REST snapshot arrives. Events with `u <= lastUpdateId` are dropped, and the first one kept must satisfy `U <= lastUpdateId + 1`. After that, each event must continue the previous one (`U <= prev_u + 1 <= u`).
 - **Duplicates:** events with `u <= prev_u` are dropped. These come from two connections overlapping during the 24 h rollover. Duplicate trade IDs are dropped too.
 - **Gaps:** an event that skips updates gets a `GAP` row and starts a new **segment**. The book then waits for the next snapshot, at most 10 minutes later.
 - **Silence:** when anything is received more than 10 s after the last book update (a disconnect, the PC asleep, a network stall), the book stopped being live at that update, and a `GAP` row is written. If the depth stream then continues the sequence (nothing lost), the kept book is re-emitted as a snapshot (`SYNTHETIC_SNAPSHOT`) where it resumes; otherwise the next REST snapshot resyncs.

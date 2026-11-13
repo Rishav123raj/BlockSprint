@@ -4,59 +4,14 @@ the trades have reached it. Skipped when the server isn't built (the Python-only
 
 import asyncio
 import json
-import socket
-import subprocess
-import time
-import urllib.request
-from pathlib import Path
 
 import pytest
 
+from live_server import http, needs_server, server  # noqa: F401  (server: the fixture)
+
 websockets = pytest.importorskip("websockets")
-
-ROOT = Path(__file__).resolve().parents[2]
-CANDIDATES = [ROOT / "build" / "Release" / "crypto_matching_engine.exe", ROOT / "build" / "crypto_matching_engine",
-              ROOT / "build" / "crypto_matching_engine.exe"]
-SERVER = next((p for p in CANDIDATES if p.exists()), None)
-pytestmark = pytest.mark.skipif(SERVER is None, reason="the server isn't built (cmake --build build)")
+pytestmark = needs_server
 SYMBOL = "FEEDUSDT"
-
-
-def free_port() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
-@pytest.fixture(scope="module")
-def server():
-    port = free_port()
-    proc = subprocess.Popen([str(SERVER), "--port", str(port), "--no-log", "--feed-queue-model", "cancel_from_back"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    base = f"http://127.0.0.1:{port}"
-    for _ in range(100):
-        try:
-            urllib.request.urlopen(base + "/api/market-feed", timeout=0.2)
-            break
-        except OSError:
-            time.sleep(0.05)
-    else:
-        proc.kill()
-        pytest.fail("the server didn't start")
-    yield port
-    proc.terminate()
-    proc.wait(timeout=5)
-
-
-def http(port, method, path, body=None):
-    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method,
-                                 data=None if body is None else json.dumps(body).encode(),
-                                 headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=3) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        return json.loads(e.read())
 
 
 async def scenario(port):

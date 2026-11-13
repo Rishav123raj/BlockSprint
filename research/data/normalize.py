@@ -51,6 +51,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from research.data.binance_sync import CONTINUE, DUPLICATE, GAP, classify, sync_from_snapshot
 from research.data.rawio import FILE_SUFFIX, PART_SUFFIX, archive_files, read_raw
 from research.data.schema import (
     AGGRESSOR_BUY, AGGRESSOR_SELL, ARROW_SCHEMA, COLUMNS, FLAG_DUPLICATE_SUSPECT, FLAG_FROM_SNAPSHOT, FLAG_LAST_IN_BATCH, FLAG_OFF_GRID,
@@ -512,8 +513,8 @@ class Normalizer:
             self._try_sync(ts, last_id, bids, asks, clamp)
 
     def _try_sync(self, ts: int, last_id: int, bids: dict[int, int], asks: dict[int, int], clamp: int) -> None:
-        pending = [(t, d) for t, d in self.buffer if d["u"] > last_id]
-        if pending and pending[0][1]["U"] > last_id + 1:
+        ok, pending = sync_from_snapshot(last_id, self.buffer, lambda e: (e[1]["U"], e[1]["u"]))
+        if not ok:
             # The snapshot is older than the oldest buffered event: an update between them is missing
             self.buffer = pending
             if self.out is not None:
@@ -544,8 +545,8 @@ class Normalizer:
             self._apply(t, data)
             return
         if self.suspended:
-            if data["u"] <= self.prev_u or data["U"] <= self.prev_u + 1:
-                if data["u"] > self.prev_u:
+            if classify(self.prev_u, data["U"], data["u"]) != GAP:
+                if classify(self.prev_u, data["U"], data["u"]) == CONTINUE:
                     self._resume(t)
                 self._apply(t, data)  # a duplicate is counted and dropped there
                 return
@@ -561,13 +562,14 @@ class Normalizer:
     def _apply(self, t: int, data: dict) -> None:
         first, last = data["U"], data["u"]
         prev = self.prev_u
-        if last <= prev:
+        what = classify(prev, first, last)
+        if what == DUPLICATE:
             ts, _ = self._stamp(t)
             out = self._route(ts)
             if out is not None:
                 out.stats.depth_duplicates_dropped += 1
             return
-        if first > prev + 1:
+        if what == GAP:
             self._gap(t, data)
             return
         ts, clamp = self._stamp(t)

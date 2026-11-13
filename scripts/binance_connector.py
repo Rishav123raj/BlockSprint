@@ -1,4 +1,18 @@
+"""Binance market data into the BlockSprint engine.
+
+v2 (the default, P7.2): research/live/feed_bridge.py streams every depth update and trade to /ws/market-feed,
+where the simulator's Synthesizer builds the book (queue positions, trades reaching resting orders).
+v1 (--v1, kept until v2 has run stably for two weeks, P7.8): mirrors the top-10 partial book as one MARKET order
+per level, re-submitting a level whenever it changes.
+
+    uv run scripts/binance_connector.py              # v2, the same 5 symbols as v1
+    uv run scripts/binance_connector.py --v1
+"""
+import argparse
 import asyncio
+import logging
+import os
+import sys
 import websockets
 import json
 import requests
@@ -239,10 +253,25 @@ async def sync_websocket_deltas(active_symbols):
             print(f"Connection lost or handshake failed: {e}. Retrying in 3 seconds...")
             await asyncio.sleep(3)
 
+def run_v2(symbols):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from research.live.feed_bridge import FeedBridge
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    bridge = FeedBridge(symbols)
+    asyncio.run(bridge.run())
+
+
 if __name__ == "__main__":
-    reset_engine()
+    parser = argparse.ArgumentParser(description="Binance market data into the BlockSprint engine")
+    parser.add_argument("--v1", action="store_true", help="the 1.0 connector (one MARKET order per top-10 level)")
+    args = parser.parse_args()
     symbols = get_active_symbols(limit=5)
     try:
-        asyncio.run(sync_websocket_deltas(symbols))
+        if args.v1:
+            reset_engine()
+            asyncio.run(sync_websocket_deltas(symbols))
+        else:
+            run_v2(symbols)
     except KeyboardInterrupt:
         print("\nConnector stopped. Exiting.")

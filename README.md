@@ -212,12 +212,13 @@ A local connector can also stream normalized L2 events to `/ws/market-feed`, whi
 ```powershell
 uv run scripts/binance_connector.py
 ```
-This syncs external L2 liquidity from major Binance quote markets directly into the BlockSprint engine.
+This syncs external L2 liquidity from major Binance quote markets directly into the BlockSprint engine. Since 2.0 (P7.2) it streams every depth update and trade, kept exact with Binance's sync rules, to `/ws/market-feed`, where the simulator's synthesizer builds the book with real queue positions; `--v1` runs the 1.0 per-level mirror. `uv run python -m research.live.feed_bridge --symbols BTCUSDT ETHUSDT` runs the bridge directly.
 
 #### 6. Perform Interactive Test Verification (Third Terminal)
 ```powershell
 uv run scripts/interactive_test.py
 ```
+(or without prompts: `--symbol BTC-USDT --side buy --type market --qty 0.05`)
 This launches a CLI prompting you for trade parameters, fetches live market depth, submits the order to BlockSprint, and asserts that the executed trades match the price-time rules exactly.
 
 ![Interactive Trade Verification Report](output/run2.PNG)
