@@ -577,6 +577,7 @@ These metrics go to `summary.txt` at the end of a session and to the metrics end
 - **Run:** `uv run python -m research.live.runner --strategy research.strategies.passive_quoter:PassiveQuoter --params '{"size": "0.001"}' --symbols BTC-USDT --duration 600 --out results/paper/run1`, with the server and the feed bridge running.
 - **Tested:** the conversions, the account arithmetic against the simulator's accounts test, the book without the strategy's orders and across a gap, replies and reports into callbacks (`tests/python/test_live_runner.py`); the research `PassiveQuoter`, the class the simulator runs, against the real server with a scripted feed: it joins both sides behind 5, gets both maker fills and ends flat (10 runs out of 10 after seeding the book; before, a snapshot sent before the sockets opened left it blind).
 - **Live (2026-11-14):** the same quoter (0.001 a side, 500 ms) on BTC-USDT for 2 minutes with the v2 bridge and `prob_power:2`: 101 maker fills, 0.0341 BTC traded, no gaps or refusals, every order cancelled at the end.
+- **Measured delays (P7.4):** `session_meta.json` gains `measured_latency`: the depth delay from the server's book change to the strategy (`md_delay_ms`, about uniform on 0-100 ms from the depth batching) and each new order's round trip to its first report (`order_rtt_ms`). The parity protocol ([parity_protocol.md](parity_protocol.md)) replays a session with them.
 
 ### 7.9 Latency seam
 

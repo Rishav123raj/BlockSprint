@@ -382,6 +382,11 @@ class LiveRunner:
         self._events: asyncio.Queue | None = None
         self._outbox: asyncio.Queue | None = None
         self._tops: dict[str, tuple] = {}
+        # Measured delays (ns), for the parity replay's latency (P7.4, P7.6): a depth update from the server's
+        # book change to the strategy; a new order from sending to its first report
+        self.md_delays: list[int] = []
+        self.order_rtts: list[int] = []
+        self._sent_at: dict[str, int] = {}
         self._journal = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -407,6 +412,7 @@ class LiveRunner:
     def send(self, symbol: str, side: Any, type: Any, price: int, quantity: int, stp: Any) -> str:
         self._seq += 1
         oid = f"{self.id_prefix}-{self._seq}"
+        self._sent_at[oid] = time.time_ns()
         self.orders[oid] = OpenOrder(oid, symbol, side, type, price, quantity, leaves=quantity, sent_at=time.time_ns())
         payload = {"action": "submit", "symbol": symbol, "order_id": oid, "owner": self.owner,
                    "side": side.name.lower(), "order_type": type.name.lower(), "quantity": decimal_text(quantity),
@@ -475,6 +481,8 @@ class LiveRunner:
         if d.get("owner") != self.owner:
             return
         r = ExecReport.from_json(d)
+        if (sent := self._sent_at.pop(r.order_id, None)) is not None:
+            self.order_rtts.append(time.time_ns() - sent)
         self._write("report", **d)
         if r.type == bs.ExecType.REJECTED and r.order_id in self._amending and r.order_id in self.orders \
                 and self.orders[r.order_id].status != bs.OrderStatus.PENDING_NEW:
@@ -550,7 +558,10 @@ class LiveRunner:
             return
         if d.get("event") != "depth":
             return
-        book.update(d.get("data", {}), self._own_resting(symbol), now)
+        data = d.get("data", {})
+        if (changed := iso_ns(data.get("timestamp"))) and len(self.md_delays) < 1_000_000:
+            self.md_delays.append(now - changed)
+        book.update(data, self._own_resting(symbol), now)
         self.stats["books"] += 1
         if self.mode == "timer_only":
             return
@@ -705,12 +716,26 @@ class LiveRunner:
                 "callback_mode": self.mode, "engine": self.engine, "start_ns": start, "end_ns": end,
                 "trading_ns": self.trading_from, "stats": self.stats,
                 "accounts": {s: vars(a) for s, a in self.accounts.items()},
-                "open_orders": len(self.orders)}
+                "open_orders": len(self.orders),
+                "measured_latency": {"md_delay_ms": _quantiles(self.md_delays),
+                                     "order_rtt_ms": _quantiles(self.order_rtts)}}
         if self._journal is not None:
             self._journal.close()
             self._journal = None
             (self.out_dir / "session_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
         return meta
+
+
+def _quantiles(ns: list[int]) -> dict[str, float] | None:
+    if not ns:
+        return None
+    v = sorted(ns)
+
+    def q(p: float) -> float:
+        return round(v[min(len(v) - 1, int(p * len(v)))] / 1e6, 3)
+
+    return {"n": len(v), "mean": round(sum(v) / len(v) / 1e6, 3), "p10": q(0.10), "p50": q(0.5), "p90": q(0.9),
+            "p99": q(0.99), "max": round(v[-1] / 1e6, 3)}
 
 
 def main(argv: list[str] | None = None) -> int:
