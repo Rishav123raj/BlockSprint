@@ -546,6 +546,21 @@ The Synthesizer is the one specified in guide §7.3 and P3.6, unchanged. Live us
 
 These metrics go to `summary.txt` at the end of a session and to the metrics endpoint (section 7.19).
 
+**As built (P7.1, `src/sim/live_feed.*`).** The first cut runs on the existing server, without L1's exchange thread: websocketpp runs every handler on one asio thread, so the feed, the order paths and the stats never interleave.
+- **`/ws/market-feed`** (loopback connections only, like the `MARKET` owner) takes JSON frames, one message or an array of them. Prices and quantities are decimal strings on the symbol's grid (set it first through `POST /api/symbols`); `ts` is optional exchange time in ns.
+  - `{"type": "snapshot", "symbol": S, "bids": [[price, qty], ...], "asks": [...]}`: the whole book.
+  - `{"type": "depth", ...}`: the same with absolute quantities, `"0"` removes a level.
+  - `{"type": "trade", "symbol": S, "price": P, "qty": Q, "side": "buy"|"sell"}`: `side` is the aggressor's (a Binance `@trade` with `m: true` is a `sell`).
+  - `{"type": "gap", "symbol": S}`: updates were lost.
+- **`LiveFeed`** turns each message into exactly the records the replayer reads from a `.bse` file and applies them through the simulator's `Synthesizer`, one per symbol, on the engine's clock (the server's `WallClock`). Depth before the first snapshot (or after a gap) is ignored and trades aren't matched until one comes, as in a replay. Sequencing and gap detection stay the connector's (P7.2).
+- **Same path, tested:** the committed slice sent as JSON messages builds the same engine book (top 20 compared every 100 batches) and the same synthesizer counters as the Synthesizer fed from the file; golden (a) sent as messages gives the hand-computed queue and the client's fill.
+- **Replies only on an error** (`{"status": "error", "message": ...}`, naming the message's index in an array); the connector streams thousands of events a second.
+- **Gaps** are logged and passed on to `/ws/market-data` subscribers as `{"event": "gap", "symbol": S}`: until the next snapshot that symbol's book is empty.
+- **Fidelity:** `GET /api/market-feed` gives, per symbol, `synced`, message, snapshot, depth, gap and trade counts, `trade_reproduced` (synced trades whose tape IOC took exactly their quantity at their price), `trade_diverted_qty` (taken from client orders: their passive fills), `trade_through_qty`, `trade_short_qty`, `crossing_fills`, the impact overlay's take and the data's top of book. On the committed BTCUSDT slice `trade_reproduced` is about 0.65 (stale and iceberg levels, P3.18's gate V4), below this section's 98% target: the target needs the live A/B feed of L2 to judge.
+- **Options:** `crypto_matching_engine --feed-queue-model M --feed-seed N --feed-impact-ms T` (default `cancel_from_back`, 0, 0); `--port N`.
+- **Around it:** `POST /api/reset` also forgets the feed (each symbol needs a snapshot again); a symbol whose tick or lot changes starts over; client taker fills feed the impact overlay when T > 0; `MARKET_TAPE` is reserved; the mirror's own reports (`MARKET`, `MARKET_TAPE`) are no longer broadcast on `/ws/executions`.
+- **Still to come:** L1 (callbacks and JSON off the engine's lock), a binary frame format, and the v2 connector (P7.2). The v1 connector keeps working alongside.
+
 ### 7.9 Latency seam
 
 ```cpp

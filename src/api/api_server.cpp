@@ -72,8 +72,8 @@ nlohmann::json fees_to_json(const std::string& owner, const FeeSchedule& schedul
 
 } // namespace
 
-ApiServer::ApiServer(MatchingEngine& engine, int depth_interval_ms)
-    : engine_(engine), depth_interval_ms_(depth_interval_ms) {
+ApiServer::ApiServer(MatchingEngine& engine, int depth_interval_ms, sim::LiveFeedOptions feed)
+    : engine_(engine), depth_interval_ms_(depth_interval_ms), feed_(engine, std::move(feed)) {
     // Suppress WebSocket++ default logging to let our Logger handle diagnostics
     server_.clear_access_channels(websocketpp::log::alevel::all);
     server_.clear_error_channels(websocketpp::log::elevel::all);
@@ -170,6 +170,9 @@ std::shared_ptr<Order> ApiServer::parse_order(const nlohmann::json& body, websoc
     // Self-trade prevention: optional participant and policy (default cancel_maker, as on Binance)
     if (body.contains("owner")) {
         order->owner_id = body["owner"].get<std::string>();
+        if (order->owner_id == kTapeOwner) {
+            throw std::invalid_argument("owner '" + kTapeOwner + "' is reserved for the market feed");
+        }
         if (order->owner_id == kMarketOwner) {
             if (!is_loopback(hdl)) {
                 throw std::invalid_argument("owner '" + kMarketOwner + "' is reserved for local market-data connectors");
@@ -199,6 +202,7 @@ nlohmann::json ApiServer::amend(const nlohmann::json& body, bool& found, bool& w
     std::vector<ExecReport> reports;
     std::vector<Trade> trades;
     bool ok = engine_.amend_order(symbol, order_id, new_total, new_price, trades, &reports);
+    feed_.client_trades(trades);
     was_rejected = rejected(reports);
     found = ok || was_rejected;
 
@@ -284,8 +288,15 @@ void ApiServer::on_http(websocketpp::connection_hdl hdl) {
             return;
         }
 
+        else if (method == "GET" && resource == "/api/market-feed") {
+            nlohmann::json resp = {{"status", "success"}, {"data", feed_.stats()}};
+            write_http_response(hdl, websocketpp::http::status_code::ok, "application/json", resp.dump());
+            return;
+        }
+
         else if (method == "POST" && resource == "/api/reset") {
             engine_.reset();
+            feed_.reset();  // the synthetic book went with the engine's: each symbol needs a snapshot again
             nlohmann::json resp = {{"status", "success"}, {"message", "Matching engine state reset successfully"}};
             write_http_response(hdl, websocketpp::http::status_code::ok, "application/json", resp.dump());
             return;
@@ -443,6 +454,14 @@ void ApiServer::on_open(websocketpp::connection_hdl hdl) {
         orders_conns_.insert(hdl);
     } else if (path.rfind("/ws/executions", 0) == 0) {
         executions_conns_.insert(hdl);
+    } else if (path.rfind("/ws/market-feed", 0) == 0) {
+        // The feed writes the exchange's book: local connectors only, as for the MARKET owner
+        if (!is_loopback(hdl)) {
+            websocketpp::lib::error_code ec;
+            server_.close(hdl, websocketpp::close::status::policy_violation, "market feed: local connections only", ec);
+            return;
+        }
+        feed_conns_.insert(hdl);
     }
 }
 
@@ -452,12 +471,23 @@ void ApiServer::on_close(websocketpp::connection_hdl hdl) {
     trades_conns_.erase(hdl);
     orders_conns_.erase(hdl);
     executions_conns_.erase(hdl);
+    feed_conns_.erase(hdl);
     LOG_DEBUG("WS connection closed.");
 }
 
 void ApiServer::on_message(websocketpp::connection_hdl hdl, WsServerType::message_ptr msg) {
     auto con = server_.get_con_from_hdl(hdl);
     std::string path = con->get_resource();
+
+    if (path.rfind("/ws/market-feed", 0) == 0) {
+        bool accepted;
+        {
+            std::lock_guard<std::mutex> lock(connection_mutex_);
+            accepted = feed_conns_.count(hdl) > 0;
+        }
+        if (accepted) on_market_feed(hdl, msg->get_payload());
+        return;
+    }
 
     // Only allow incoming order submission/cancel messages on /ws/orders
     if (path.rfind("/ws/orders", 0) == 0) {
@@ -471,6 +501,7 @@ void ApiServer::on_message(websocketpp::connection_hdl hdl, WsServerType::messag
                 std::vector<ExecReport> reports;
                 std::vector<Trade> trades = action == "submit" ? engine_.submit_order(order, &reports)
                                                                : engine_.replace_order(order, &reports);
+                feed_.client_trades(trades);
                 server_.send(hdl, order_response(*order, trades, reports).dump(), websocketpp::frame::opcode::text);
             }
             else if (action == "amend") {
@@ -499,6 +530,30 @@ void ApiServer::on_message(websocketpp::connection_hdl hdl, WsServerType::messag
             }
             server_.send(hdl, resp.dump(), websocketpp::frame::opcode::text);
         }
+    }
+}
+
+void ApiServer::on_market_feed(websocketpp::connection_hdl hdl, const std::string& payload) {
+    // Replies only on an error: the connector streams thousands of events a second
+    try {
+        feed_.apply(nlohmann::json::parse(payload));
+    } catch (const std::exception& e) {
+        nlohmann::json resp = {{"status", "error"}, {"message", e.what()}};
+        websocketpp::lib::error_code ec;
+        server_.send(hdl, resp.dump(), websocketpp::frame::opcode::text, ec);
+    }
+    for (const auto& symbol : feed_.take_gaps()) {
+        LOG_WARN("Market feed gap on " + symbol + ": its book is unknown until the next snapshot");
+        broadcast_gap(symbol);
+    }
+}
+
+void ApiServer::broadcast_gap(const std::string& symbol) {
+    std::lock_guard<std::mutex> lock(connection_mutex_);
+    const std::string payload = nlohmann::json{{"event", "gap"}, {"symbol", symbol}}.dump();
+    for (const auto& hdl : market_data_conns_) {
+        websocketpp::lib::error_code ec;
+        server_.send(hdl, payload, websocketpp::frame::opcode::text, ec);
     }
 }
 
@@ -589,6 +644,11 @@ void ApiServer::broadcast_trade(const std::string& symbol, const Trade& trade) {
 }
 
 void ApiServer::broadcast_exec_report(const ExecReport& report) {
+    // The mirror's own orders (the v1 connector's levels, the feed's synthetic orders and tape IOCs) are the
+    // market, not anyone's executions
+    if (report.owner_id == kMarketOwner || report.owner_id == kTapeOwner) {
+        return;
+    }
     std::lock_guard<std::mutex> lock(connection_mutex_);
     if (executions_conns_.empty()) {
         return;

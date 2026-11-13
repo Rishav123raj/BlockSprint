@@ -2,6 +2,7 @@
 #include "core/matching_engine.hpp"
 #include "core/market_data.hpp"
 #include "core/models.hpp"
+#include "live_feed.hpp"
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
 #include <asio/steady_timer.hpp>
@@ -19,7 +20,8 @@ public:
     // The engine must outlive the server.
     // Depth updates are coalesced per symbol and sent at most every depth_interval_ms (always the latest
     // book, like Binance's @depth@100ms streams); 0 sends every update immediately (1.0 behavior).
-    explicit ApiServer(MatchingEngine& engine, int depth_interval_ms = 100);
+    // feed: how /ws/market-feed turns L2 events into the engine's book (P7.1; the simulator's Synthesizer).
+    explicit ApiServer(MatchingEngine& engine, int depth_interval_ms = 100, sim::LiveFeedOptions feed = {});
     ~ApiServer();
 
     // Starts the server on the specified port. This method blocks or spawns a thread.
@@ -43,8 +45,15 @@ private:
     void on_close(websocketpp::connection_hdl hdl);
     void on_message(websocketpp::connection_hdl hdl, WsServerType::message_ptr msg);
 
-    // Owner reserved for mirrored exchange liquidity; accepted only from loopback connections
+    // Owners reserved for mirrored exchange liquidity (the v1 connector's levels, the market feed's synthetic
+    // orders and tape IOCs); MARKET is accepted only from loopback connections, MARKET_TAPE never
     inline static const std::string kMarketOwner = "MARKET";
+    inline static const std::string kTapeOwner = "MARKET_TAPE";
+
+    // /ws/market-feed: applies a frame of L2 events; errors go back to the connector
+    void on_market_feed(websocketpp::connection_hdl hdl, const std::string& payload);
+    // Tells market-data subscribers that a symbol's feed lost updates: its book is unknown until a snapshot
+    void broadcast_gap(const std::string& symbol);
 
     // Builds an order from a REST/WS request body (validates fields and the owner)
     std::shared_ptr<Order> parse_order(const nlohmann::json& body, websocketpp::connection_hdl hdl);
@@ -82,6 +91,7 @@ private:
 
     MatchingEngine& engine_;
     int depth_interval_ms_;
+    sim::LiveFeed feed_;  // touched only on the server thread
     WsServerType server_;
     std::unique_ptr<asio::steady_timer> depth_timer_;
     std::mutex depth_mutex_;
@@ -96,4 +106,5 @@ private:
     std::set<websocketpp::connection_hdl, std::owner_less<websocketpp::connection_hdl>> trades_conns_;
     std::set<websocketpp::connection_hdl, std::owner_less<websocketpp::connection_hdl>> orders_conns_;
     std::set<websocketpp::connection_hdl, std::owner_less<websocketpp::connection_hdl>> executions_conns_;
+    std::set<websocketpp::connection_hdl, std::owner_less<websocketpp::connection_hdl>> feed_conns_;
 };

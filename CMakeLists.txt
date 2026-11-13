@@ -68,7 +68,11 @@ if(BLOCKSPRINT_BUILD_SERVER)
         _WEBSOCKETPP_CPP11_STL_
         _WEBSOCKETPP_CPP11_THREAD_
     )
-    target_link_libraries(api PUBLIC engine_core Threads::Threads)
+    # /ws/market-feed applies L2 events through the simulator's Synthesizer (P7.1)
+    if(NOT BLOCKSPRINT_BUILD_SIM)
+        message(FATAL_ERROR "BLOCKSPRINT_BUILD_SERVER needs BLOCKSPRINT_BUILD_SIM (the market feed's Synthesizer)")
+    endif()
+    target_link_libraries(api PUBLIC engine_core sim Threads::Threads)
     if(WIN32)
         target_link_libraries(api PUBLIC ws2_32 mswsock)
     endif()
@@ -124,6 +128,7 @@ if(BLOCKSPRINT_BUILD_SIM)
         src/sim/observed_book.cpp
         src/sim/gateway.cpp
         src/sim/risk_guard.cpp
+        src/sim/live_feed.cpp
         src/sim/simulator.cpp
         src/sim/config.cpp
         src/sim/recorder.cpp
@@ -157,6 +162,7 @@ if(BLOCKSPRINT_BUILD_SIM)
             tests/sim/golden_test.cpp
             tests/sim/determinism_test.cpp
             tests/sim/multi_symbol_test.cpp
+            tests/sim/live_feed_test.cpp
         )
         target_include_directories(sim_tests SYSTEM PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/external/doctest)
         target_link_libraries(sim_tests PRIVATE sim)

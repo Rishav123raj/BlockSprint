@@ -204,7 +204,9 @@ The summary is printed to the console and must end with `Status: SUCCESS!`.
 ```powershell
 .\build\Release\crypto_matching_engine.exe
 ```
-The server starts listening on Port `8080` for REST requests and WebSocket client registrations. Each run logs to its own file, `logs/matching_engine-YYYYMMDD-HHMMSS.log` (UTC). Use `--log-level debug|info|warn|error|off`, `--log-file PATH`, `--log-dir DIR` or `--no-log` to change that (`--help` lists them).
+The server starts listening on Port `8080` for REST requests and WebSocket client registrations (`--port N` for another). Each run logs to its own file, `logs/matching_engine-YYYYMMDD-HHMMSS.log` (UTC). Use `--log-level debug|info|warn|error|off`, `--log-file PATH`, `--log-dir DIR` or `--no-log` to change that (`--help` lists them).
+
+A local connector can also stream normalized L2 events to `/ws/market-feed`, which builds the book through the simulator's own synthesizer (2.0, P7.1; `GET /api/market-feed` for its fidelity counters). The protocol is in [docs/live_platform_architecture.md](docs/live_platform_architecture.md) §7.8.
 
 #### 5. Start the Binance Live Sync Connector (Second Terminal)
 ```powershell

@@ -6,6 +6,8 @@
 #include <thread>
 #include <chrono>
 #include <string>
+#include <cstdlib>
+#include <memory>
 
 volatile sig_atomic_t g_running = 1;
 
@@ -17,6 +19,10 @@ namespace {
 
 void print_usage() {
     std::cout << "Usage: crypto_matching_engine [options]\n"
+                 "  --port N           listen on port N (default 8080)\n"
+                 "  --feed-queue-model M  /ws/market-feed: the Synthesizer's queue model (default cancel_from_back)\n"
+                 "  --feed-seed N         /ws/market-feed: the queue model's seed (default 0)\n"
+                 "  --feed-impact-ms T    /ws/market-feed: impact half-life of client taker fills (default 0)\n"
                  "  --log-file PATH    write the log to PATH (appends)\n"
                  "  --log-dir DIR      directory for the per-run log file (default: logs)\n"
                  "  --log-level LEVEL  debug, info (default), warn, error or off\n"
@@ -32,6 +38,8 @@ int main(int argc, char* argv[]) {
     std::string log_dir = "logs";
     LogLevel log_level = LogLevel::LEVEL_INFO;
     bool no_log = false;
+    uint16_t port = 8080;
+    sim::LiveFeedOptions feed;
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -39,6 +47,19 @@ int main(int argc, char* argv[]) {
         if (arg == "--help" || arg == "-h") {
             print_usage();
             return 0;
+        } else if (arg == "--port" && has_value) {
+            const int p = std::atoi(argv[++i]);
+            if (p <= 0 || p > 65535) {
+                std::cerr << "Bad port: " << argv[i] << '\n';
+                return 2;
+            }
+            port = static_cast<uint16_t>(p);
+        } else if (arg == "--feed-queue-model" && has_value) {
+            feed.queue_model = argv[++i];
+        } else if (arg == "--feed-seed" && has_value) {
+            feed.seed = std::strtoull(argv[++i], nullptr, 10);
+        } else if (arg == "--feed-impact-ms" && has_value) {
+            feed.impact_half_life_ns = static_cast<uint64_t>(std::atof(argv[++i]) * 1e6);
         } else if (arg == "--no-log") {
             no_log = true;
         } else if (arg == "--log-file" && has_value) {
@@ -81,7 +102,14 @@ int main(int argc, char* argv[]) {
     MatchingEngine engine;
     // Binance spot regular tier (0.10% maker / 0.10% taker) unless changed through POST /api/fees
     engine.set_default_fee_schedule(binance_spot_regular());
-    ApiServer server(engine);
+    std::unique_ptr<ApiServer> server_ptr;
+    try {
+        server_ptr = std::make_unique<ApiServer>(engine, 100, feed);
+    } catch (const std::exception& e) {
+        std::cerr << "Bad market feed option: " << e.what() << '\n';
+        return 2;
+    }
+    ApiServer& server = *server_ptr;
 
     // Hook up matching engine events to WebSocket broadcast feeds
     engine.register_bbo_callback(
@@ -108,12 +136,12 @@ int main(int argc, char* argv[]) {
         }
     );
 
-    // Start the REST/WebSocket API Server on Port 8080
-    server.start(8080);
+    server.start(port);
 
-    LOG_INFO("Crypto Trading Engine is running at http://127.0.0.1:8080 and ws://127.0.0.1:8080");
+    const std::string where = "http://127.0.0.1:" + std::to_string(port) + " and ws://127.0.0.1:" + std::to_string(port);
+    LOG_INFO("Crypto Trading Engine is running at " + where + " (market feed: queue model " + feed.queue_model + ")");
     LOG_INFO("Press Ctrl+C to exit.");
-    std::cout << "Running at http://127.0.0.1:8080 and ws://127.0.0.1:8080. Press Ctrl+C to exit.\n";
+    std::cout << "Running at " << where << ". Press Ctrl+C to exit.\n";
 
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
