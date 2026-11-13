@@ -223,6 +223,13 @@ This launches a CLI prompting you for trade parameters, fetches live market dept
 
 ![Interactive Trade Verification Report](output/run2.PNG)
 
+#### Paper trading a research strategy (2.0, P7.3)
+With the server and the connector running, a strategy from `research/strategies/` runs unchanged against the live mirror:
+```powershell
+uv run python -m research.live.runner --strategy research.strategies.passive_quoter:PassiveQuoter --params '{"size": "0.001"}' --symbols BTC-USDT --duration 600 --out results/paper/run1
+```
+It writes `session.jsonl` and `session_meta.json` for the paper-vs-simulator comparison ([docs/live_platform_architecture.md](docs/live_platform_architecture.md) §7.8).
+
 #### 7. Run WebSocket Throughput Benchmark
 ```powershell
 uv run scripts/perf_test.py

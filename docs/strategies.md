@@ -16,6 +16,8 @@ strategy:
 
 **Units:** quantities are decimal strings, as in the C++ strategies (`"0.001"`), and times are in milliseconds. A bad parameter raises `ValueError` when the strategy is built, and an experiment reports it when the file is loaded.
 
+Every strategy here also runs unchanged in paper mode against the live server: `uv run python -m research.live.runner --strategy research.strategies.<module>:<Class> --params '{...}' --symbols BTC-USDT` (P7.3, [live_platform_architecture.md](live_platform_architecture.md) §7.8).
+
 ## `execution:Executor`: TWAP and POV
 
 Works a parent order of `quantity` on one `side`. Every `interval_ms` (default 1 s) it sends the shortfall against its schedule:
