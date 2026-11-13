@@ -120,7 +120,7 @@ const std::map<std::string, std::set<std::string>>& schema() {
         {"latency.ack", {"model", "us", "mean_us", "sd_us", "median_us", "sigma", "file", "unit", "min_us", "max_us"}},
         {"latency_regime", {"window_ms", "curve", "channels"}},
         {"queue_model", {"model", "n"}},
-        {"impact", {"half_life_ms"}},
+        {"impact", {"half_life_ms", "permanent_coefficient", "daily_volatility", "daily_volume"}},
         {"fees", {"maker_rate", "taker_rate"}},
         {"limits", {"orders_per_10s", "orders_per_day", "open_orders", "request_weight_per_min"}},
         {"risk", {"max_position", "max_order_notional", "max_open_orders", "max_drawdown"}},
@@ -388,7 +388,7 @@ json default_run_config() {
         {"seed", 0},
         {"tie_break", "data_first"},
         {"queue_model", {{"model", "cancel_from_back"}}},
-        {"impact", {{"half_life_ms", 0}}},
+        {"impact", {{"half_life_ms", 0}, {"permanent_coefficient", 0}, {"daily_volatility", 0}, {"daily_volume", "0"}}},
         {"latency_regime", {{"window_ms", 1000}, {"curve", json::array()}, {"channels", {"feed", "entry", "ack"}}}},
         {"fees", {{"maker_rate", "0.001"}, {"taker_rate", "0.001"}}},  // Binance spot, regular tier
         {"limits", {{"orders_per_10s", 100}, {"orders_per_day", 200000}, {"open_orders", 200},
@@ -489,6 +489,12 @@ RunConfig resolve_run_config(const json& file, const std::vector<std::string>& o
         bad("queue_model", e.what());
     }
     o.impact_half_life_ns = static_cast<uint64_t>(std::llround(get_nonneg(r, "impact.half_life_ms") * 1e6));
+    PermanentImpactConfig& pi = o.permanent_impact;
+    pi.coefficient = get_nonneg(r, "impact.permanent_coefficient");
+    pi.daily_volatility = get_nonneg(r, "impact.daily_volatility");
+    pi.daily_volume = get_amount(r, "impact.daily_volume");
+    if (pi.enabled() && pi.daily_volatility <= 0) bad("impact.daily_volatility", "must be positive with a permanent_coefficient");
+    if (pi.enabled() && pi.daily_volume <= 0) bad("impact.daily_volume", "must be positive with a permanent_coefficient");
 
     if (!r.contains("latency")) {
         bad("latency", "missing: set latency_preset (" + std::string("zero, binance_spot_tokyo_vps, binance_spot_home_pc") +

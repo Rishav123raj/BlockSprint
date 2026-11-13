@@ -84,10 +84,38 @@ void Synthesizer::apply_depth(const Batch& batch) {
     }
     changes_.clear();
     for (const bse::Record* r = batch.begin; r < batch.end; ++r) {
-        data_.set(r->side, r->px, r->qty);
-        changes_.push_back(Change{r->side, r->px});
+        data_.set(r->side, r->px + shift_, r->qty);
+        changes_.push_back(Change{r->side, r->px + shift_});
     }
     reconcile(changes_unique());
+}
+
+void Synthesizer::set_shift(int64_t ticks) {
+    if (ticks == shift_) {
+        return;
+    }
+    const int64_t d = ticks - shift_;
+    shift_ = ticks;
+    ++stats_.shifts;
+    if (!synced_) {
+        return;  // nothing to move; the next snapshot comes in moved
+    }
+    changes_.clear();
+    moved_.clear();
+    for (uint8_t side = 0; side < 2; ++side) {
+        data_.top(side, kAllLevels, levels_);
+        for (const Level& level : levels_) {
+            changes_.push_back(Change{side, level.px});
+            if (level.px + d > 0) moved_.emplace_back(side, Level{level.px + d, level.qty});
+        }
+    }
+    data_.clear();
+    impact_.clear();
+    for (const auto& [side, level] : moved_) {
+        data_.set(side, level.px, level.qty);
+        changes_.push_back(Change{side, level.px});
+    }
+    reconcile(false);  // old and new prices overlap
 }
 
 // One depth event lists each price once; checked rather than assumed (hand-written files may not)
@@ -113,8 +141,8 @@ void Synthesizer::apply_snapshot(const Batch& batch) {
     data_.clear();
     impact_.clear();
     for (const bse::Record* r = batch.begin + 1; r + 1 < batch.end; ++r) {
-        data_.set(r->side, r->px, r->qty);
-        changes_.push_back(Change{r->side, r->px});
+        data_.set(r->side, r->px + shift_, r->qty);
+        changes_.push_back(Change{r->side, r->px + shift_});
     }
     synced_ = true;
     reconcile(false);  // a level the book had and the snapshot has is listed twice
@@ -160,7 +188,7 @@ void Synthesizer::apply_trade(const bse::Record& r) {
     // A trade record's side is the aggressor's: a buyer consumes asks
     const Side aggressor = r.side == bse::BID ? Side::BUY : Side::SELL;
     const Side resting = aggressor == Side::BUY ? Side::SELL : Side::BUY;
-    const Price price = r.px * options_.tick_size;
+    const Price price = (r.px + shift_) * options_.tick_size;
     const int64_t qty = r.qty * options_.lot_size;
     if (qty <= 0 || price <= 0) {
         return;

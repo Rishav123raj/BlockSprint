@@ -1,9 +1,40 @@
 #include "impact.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
 namespace sim {
+
+PermanentImpact::PermanentImpact(PermanentImpactConfig config, int64_t tick_size)
+    : config_(config), tick_(tick_size) {
+    if (config_.coefficient < 0) {
+        throw std::invalid_argument("PermanentImpact: the coefficient must not be negative");
+    }
+    if (enabled() && (config_.daily_volatility <= 0 || config_.daily_volume <= 0 || tick_size <= 0)) {
+        throw std::invalid_argument("PermanentImpact needs a positive daily volatility, daily volume and tick size");
+    }
+}
+
+double PermanentImpact::fraction() const {
+    if (!enabled() || net_ == 0) {
+        return 0;
+    }
+    const double x = static_cast<double>(net_ < 0 ? -net_ : net_);
+    const double f = config_.coefficient * config_.daily_volatility *
+                     std::sqrt(x / static_cast<double>(config_.daily_volume));
+    return net_ < 0 ? -f : f;
+}
+
+int64_t PermanentImpact::take(Side aggressor, int64_t qty, Price price) {
+    if (!enabled() || qty <= 0) {
+        return shift_;
+    }
+    net_ += aggressor == Side::BUY ? qty : -qty;
+    shift_ = std::llround(fraction() * static_cast<double>(price) / static_cast<double>(tick_));
+    max_abs_shift_ = std::max(max_abs_shift_, shift_ < 0 ? -shift_ : shift_);
+    return shift_;
+}
 
 ImpactOverlay::ImpactOverlay(uint64_t half_life_ns, int64_t lot_size) : half_life_ns_(half_life_ns), lot_(lot_size) {
     if (lot_size <= 0) {

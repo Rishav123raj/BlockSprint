@@ -91,6 +91,7 @@ TEST_CASE("a minimal config gets the defaults; the dataset manifest gives the fi
     CHECK(rc.limits.request_weight_per_min == 6000);
     CHECK_FALSE(rc.sim.latency_regime.enabled());
     CHECK_FALSE(rc.risk.any());
+    CHECK_FALSE(rc.sim.permanent_impact.enabled());
     CHECK(rc.gap == GapPolicy::HALT);
     CHECK(rc.sim.latency_regime.window_ns == 1000000000ULL);
     CHECK(rc.strategy_name == "passive_quoter");
@@ -114,7 +115,8 @@ TEST_CASE("precedence: defaults < preset < file < overrides; a model object nami
     cfg["seed"] = 1;
     cfg["fees"] = {{"maker_rate", "-0.0001"}};
     const RunConfig rc = resolve_run_config(cfg, {"seed=7", "latency.entry.median_us=5000", "strategy.params.size=\"0.002\"",
-                                                  "impact.half_life_ms=2.5", "latency_regime.curve=[[500,1],[2000,2.5]]",
+                                                  "impact.half_life_ms=2.5", "impact.permanent_coefficient=0.5",
+                                                  "impact.daily_volatility=0.025", "impact.daily_volume=20000", "latency_regime.curve=[[500,1],[2000,2.5]]",
                                                   "latency_regime.channels=[\"entry\",\"ack\"]",
                                                   "risk.max_position=\"0.01\"", "risk.max_drawdown=25",
                                                   "risk.max_open_orders=4", "gap_policy=flatten"});
@@ -126,6 +128,9 @@ TEST_CASE("precedence: defaults < preset < file < overrides; a model object nami
     CHECK(lat["feed"] == latency_preset("binance_spot_tokyo_vps")["feed"]);
     CHECK(rc.sim.seed == 7);
     CHECK(rc.sim.impact_half_life_ns == 2500000);
+    CHECK(rc.sim.permanent_impact.coefficient == 0.5);
+    CHECK(rc.sim.permanent_impact.daily_volatility == 0.025);
+    CHECK(rc.sim.permanent_impact.daily_volume == 20000 * kFixedScale);
     const LatencyRegimeConfig& lr = rc.sim.latency_regime;
     CHECK(lr.curve == std::vector<std::pair<double, double>>{{500.0, 1.0}, {2000.0, 2.5}});
     CHECK((!lr.feed && lr.entry && lr.ack));
@@ -251,6 +256,8 @@ TEST_CASE("errors name the key") {
     CHECK(contains(with("limits.request_weight_per_min=-1"), "limits.request_weight_per_min"));
     CHECK(contains(with("seed=1.5"), "seed"));
     CHECK(contains(with("impact.half_life_ms=-1"), "impact.half_life_ms"));
+    CHECK(contains(with("impact.permanent_coefficient=1"), "impact.daily_volatility"));
+    CHECK(contains(with("impact.permanent_coefficient=-1"), "impact.permanent_coefficient"));
     CHECK(contains(with("latency_regime.window_ms=0"), "latency_regime.window_ms"));
     CHECK(contains(with("risk.max_position=\"-1\""), "risk.max_position"));
     CHECK(contains(with("risk.max_drawdown=\"0.000000001\""), "risk.max_drawdown"));

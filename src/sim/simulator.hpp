@@ -39,6 +39,7 @@ struct SimulatorOptions {
     std::string queue_model = "cancel_from_back";
     uint64_t impact_half_life_ns = 0;  // P6.1: how long a strategy's taker fills keep liquidity out (0: until
                                        // the data next changes the level)
+    PermanentImpactConfig permanent_impact{};  // P6.6: square-root mid shift from strategy takes (off: coefficient 0)
     LatencyRegimeConfig latency_regime{};  // P6.3: delays scaled by the market's message rate (off: no curve)
     uint64_t seed = 0;       // every random stream of the run derives from it
 };
@@ -79,10 +80,12 @@ public:
     MatchingEngine& engine() { return *engine_; }
     SimGateway& gateway() { return *gateway_; }
     const Synthesizer& synthesizer() const { return *synth_; }
+    const PermanentImpact& permanent_impact() const { return *permanent_; }
     uint64_t now() const { return clock_->now_ns(); }
 
 private:
     void sample_until(uint64_t t);  // fires the samples due at or before t
+    void strategy_trades(const std::vector<Trade>& trades);  // impact overlay and permanent impact
 
     SimulatorOptions options_;
     Replayer replayer_;
@@ -91,6 +94,7 @@ private:
     std::unique_ptr<QueueModel> model_;
     Rng queue_rng_;
     std::unique_ptr<Synthesizer> synth_;
+    std::unique_ptr<PermanentImpact> permanent_;
     SimQueue queue_;
     std::unique_ptr<SimGateway> gateway_;
 

@@ -6,7 +6,8 @@
 //
 // Batches are applied with the reconstruction rules (snapshot replaces, depth sets levels, gap clears and
 // invalidates until the next snapshot), so after the same batches it equals the Reconstructor's book.
-// Prices and quantities come out in 1e-8 units, like everything the strategy sends.
+// Prices and quantities come out in 1e-8 units, like everything the strategy sends. With permanent impact
+// (P6.6) every price is moved by the batch's shift, as the market moved at the exchange when it was applied.
 #include "l2_book.hpp"
 #include "replayer.hpp"
 
@@ -71,6 +72,7 @@ private:
 
     int64_t tick_;
     int64_t lot_;
+    int64_t shift_ = 0;  // ticks, from the newest batch
     L2Book book_;
     bool valid_ = false;
     std::optional<TradeEvent> last_trade_;

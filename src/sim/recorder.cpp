@@ -377,6 +377,14 @@ json ResultRecorder::finish(const json& meta) {
                       {"delays_scaled", lr->samples()}, {"mean_multiplier", lr->mean_multiplier()},
                       {"max_multiplier", lr->max_multiplier()}};
     }
+    json permanent = nullptr;
+    if (const PermanentImpact& pi = sim_.permanent_impact(); pi.enabled()) {
+        permanent = json{{"coefficient", pi.config().coefficient}, {"daily_volatility", pi.config().daily_volatility},
+                         {"daily_volume", format_fixed(pi.config().daily_volume)},
+                         {"net_taken_qty", format_fixed(pi.net_qty())}, {"final_shift", format_fixed(pi.shift_ticks() * h.tick_size)},
+                         {"max_abs_shift", format_fixed(pi.max_abs_shift_ticks() * h.tick_size)},
+                         {"shifts", sy.shifts}};
+    }
     json out{
         {"format", "bs_sim.run/1"},
         {"window",
@@ -385,6 +393,7 @@ json ResultRecorder::finish(const json& meta) {
           {"end_ns", st.end_ns}}},
         {"simulator",
          {{"seed", opt.seed}, {"queue_model", opt.queue_model}, {"impact_half_life_ms", opt.impact_half_life_ns / 1e6},
+          {"permanent_impact", permanent},
           {"latency_regime", regime}, {"tie_break", opt.tie_break == TieBreak::DATA_FIRST ? "data_first" : "orders_first"}}},
         {"data_header",
          {{"symbol", h.symbol}, {"tick_size", format_fixed(h.tick_size)}, {"lot_size", format_fixed(h.lot_size)},

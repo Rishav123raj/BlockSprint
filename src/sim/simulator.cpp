@@ -38,9 +38,24 @@ Simulator::Simulator(const std::string& bse_path, SimulatorOptions options)
     synth_ = std::make_unique<Synthesizer>(*engine_, *model_, queue_rng_, so);
     gateway_ = std::make_unique<SimGateway>(*engine_, queue_, h.symbol, h.tick_size, h.lot_size, options_.seed);
     gateway_->set_latency_regime(options_.latency_regime);
-    if (options_.impact_half_life_ns) {
-        gateway_->set_taker_trades([this](const std::vector<Trade>& trades) { synth_->strategy_trades(trades); });
+    permanent_ = std::make_unique<PermanentImpact>(options_.permanent_impact, h.tick_size);
+    if (options_.impact_half_life_ns || permanent_->enabled()) {
+        gateway_->set_taker_trades([this](const std::vector<Trade>& trades) { strategy_trades(trades); });
     }
+}
+
+void Simulator::strategy_trades(const std::vector<Trade>& trades) {
+    synth_->strategy_trades(trades);
+    if (!permanent_->enabled()) {
+        return;
+    }
+    // Only liquidity taken from the market moves it, not trades between strategies
+    for (const Trade& t : trades) {
+        if (Synthesizer::is_synthetic_id(t.maker_order_id)) {
+            permanent_->take(t.aggressor_side, t.quantity, t.price);
+        }
+    }
+    synth_->set_shift(permanent_->shift_ticks());
 }
 
 void Simulator::set_sampler(uint64_t every_ns, std::function<void(uint64_t)> fn) {
@@ -109,8 +124,9 @@ void Simulator::run() {
             continue;
         }
         data_time = e.time;
-        const Batch& batch = std::get<Batch>(e.payload.body);
+        Batch batch = std::get<Batch>(e.payload.body);
         synth_->apply(batch);
+        batch.shift = synth_->shift();  // the strategies see the market as it now stands at the exchange
         gateway_->publish(batch);
         ++stats_.data_batches;
         if (replayer_.next(b)) {

@@ -1,6 +1,7 @@
 // Queue models (P3.7) and the synthesizer (P3.6). The golden scenarios have hand-computed expected queues
 // and fills, worked out in the comments before the code was written.
 #include <doctest.h>
+#include "observed_book.hpp"
 #include "queue_models.hpp"
 #include "synthesizer.hpp"
 
@@ -659,6 +660,93 @@ TEST_CASE("impact (e): only synthetic liquidity counts; the bid side too") {
     f.synth->strategy_trades(none);
     CHECK(f.synth->impact().levels() == 1);
     CHECK(f.synth->stats().impact_taken_qty == 3 * kLot);
+}
+
+TEST_CASE("permanent impact (a): the square-root law, in whole ticks at the take's price") {
+    // Y = 1, sigma = 2%, V = 100 units; price 100.00, tick 0.01
+    PermanentImpactConfig c;
+    c.coefficient = 1;
+    c.daily_volatility = 0.02;
+    c.daily_volume = 100 * kFixedScale;
+    PermanentImpact pi(c, kTick);
+    const Price p100 = 10000 * kTick;
+    CHECK(pi.take(Side::BUY, kFixedScale, p100) == 20);         // 0.02 * sqrt(1 / 100) = 0.2% = 0.20 = 20 ticks
+    CHECK(pi.take(Side::BUY, 3 * kFixedScale, p100) == 40);     // X = 4: 0.02 * sqrt(0.04) = 0.4%
+    CHECK(pi.fraction() == doctest::Approx(0.004));
+    CHECK(pi.take(Side::SELL, 4 * kFixedScale, p100) == 0);     // sold back: no decay, no memory
+    CHECK(pi.take(Side::SELL, kFixedScale, p100) == -20);
+    CHECK(pi.net_qty() == -kFixedScale);
+    CHECK(pi.max_abs_shift_ticks() == 40);
+    CHECK(pi.take(Side::SELL, 0, p100) == -20);                 // nothing taken, nothing changes
+
+    PermanentImpact off(PermanentImpactConfig{}, kTick);
+    CHECK_FALSE(off.enabled());
+    CHECK(off.take(Side::BUY, 100 * kFixedScale, p100) == 0);
+    c.daily_volatility = 0;
+    CHECK_THROWS_AS(PermanentImpact(c, kTick), std::invalid_argument);
+    c.daily_volatility = 0.02;
+    c.daily_volume = 0;
+    CHECK_THROWS_AS(PermanentImpact(c, kTick), std::invalid_argument);
+}
+
+TEST_CASE("permanent impact (b): a shift moves the whole synthetic book; crossed strategy orders trade") {
+    Fixture f;
+    f.snapshot(1, {{BID, 10000, 5}, {BID, 9990, 4}, {ASK, 10010, 5}});
+    f.sell(10030, 2);                                     // our ask rests at 100.30
+    f.synth->set_shift(30);                               // the market moves up 0.30
+    // The bid 100.00 x 5 is now at 100.30: it crosses our ask, trades 2 at our price, 3 rest
+    auto fills = f.fills();
+    REQUIRE(fills.size() == 1);
+    CHECK(fills[0].last_px == 10030 * kTick);
+    CHECK(fills[0].last_qty == 2 * kLot);
+    CHECK(fills[0].liquidity == Liquidity::MAKER);
+    CHECK(f.queue(Side::BUY, 10000).empty());
+    CHECK(f.queue(Side::BUY, 10030) == std::vector<Slot>{syn(3)});
+    CHECK(f.queue(Side::BUY, 10020) == std::vector<Slot>{syn(4)});
+    CHECK(f.queue(Side::SELL, 10010).empty());
+    CHECK(f.queue(Side::SELL, 10040) == std::vector<Slot>{syn(5)});
+    CHECK(f.synth->data().best_bid()->px == 10030);
+    CHECK(f.synth->stats().shifts == 1);
+    f.consistent();
+
+    // Data keeps coming at its own prices and lands moved
+    f.depth(2, {{BID, 10000, 7}});
+    CHECK(f.queue(Side::BUY, 10030) == std::vector<Slot>{syn(7)});
+    f.trade(3, AGGR_BUY, 10010, 2);                       // a buyer at 100.10 takes 2 of the asks, now at 100.40
+    CHECK(f.queue(Side::SELL, 10040) == std::vector<Slot>{syn(3)});
+    f.consistent();
+
+    // Back to 0; a shift while not synced only applies to the next snapshot
+    f.synth->set_shift(0);
+    CHECK(f.queue(Side::BUY, 10030).empty());
+    CHECK(f.queue(Side::BUY, 10000) == std::vector<Slot>{syn(7)});
+    f.gap(4);
+    f.synth->set_shift(-10);
+    f.snapshot(5, {{BID, 10000, 1}, {ASK, 10010, 1}});
+    CHECK(f.queue(Side::BUY, 9990) == std::vector<Slot>{syn(1)});
+    CHECK(f.queue(Side::SELL, 10000) == std::vector<Slot>{syn(1)});
+    f.consistent(true);
+    CHECK_FALSE(f.engine.is_crossed(kSymbol));
+}
+
+TEST_CASE("permanent impact (c): the observed book shows each batch moved by its shift") {
+    ObservedBook b(kTick, kLot);
+    std::vector<bse::Record> snap{Fixture::rec(1, bse::SNAP_BEGIN, 0, 0, 0, bse::FROM_SNAPSHOT),
+                                  Fixture::rec(1, bse::SNAP_LEVEL, BID, 10000, 5, bse::FROM_SNAPSHOT),
+                                  Fixture::rec(1, bse::SNAP_LEVEL, ASK, 10010, 2, bse::FROM_SNAPSHOT),
+                                  Fixture::rec(1, bse::SNAP_END, 0, 0, 0, bse::FROM_SNAPSHOT | bse::LAST_IN_BATCH)};
+    b.apply(Batch{BatchKind::SNAPSHOT, snap.data(), snap.data() + snap.size(), 0}, 1);
+    CHECK(b.best_bid()->price == 10000 * kTick);
+    std::vector<bse::Record> trade{Fixture::rec(2, bse::TRADE, AGGR_BUY, 10010, 1)};
+    b.apply(Batch{BatchKind::TRADE, trade.data(), trade.data() + 1, 0, 15}, 2);
+    CHECK(b.best_bid()->price == 10015 * kTick);           // the whole book moves with the newest batch
+    CHECK(b.best_ask()->price == 10025 * kTick);
+    CHECK(b.last_trade()->price == 10025 * kTick);
+    CHECK(b.qty(Side::BUY, 10015 * kTick) == 5 * kLot);
+    CHECK(b.qty(Side::BUY, 10000 * kTick) == 0);
+    std::vector<BookLevel> top;
+    b.top(Side::SELL, 5, top);
+    CHECK(top == std::vector<BookLevel>{{10025 * kTick, 2 * kLot}});
 }
 
 } // TEST_SUITE

@@ -25,6 +25,7 @@ struct Batch {
     const bse::Record* begin;
     const bse::Record* end;
     uint64_t index;  // position of the first record in the file
+    int64_t shift = 0;  // P6.6: ticks the market had moved by permanent impact when the batch was applied
 
     int64_t ts_local() const { return begin->ts_local; }
     size_t size() const { return static_cast<size_t>(end - begin); }

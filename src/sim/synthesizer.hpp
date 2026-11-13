@@ -25,7 +25,8 @@
 // Assumptions (architecture §19): strategy orders don't change what others do. A strategy's taker fill
 // removes synthetic liquidity until the data next changes that level (impact half-life 0); with a half-life
 // tau > 0 (P6.1, ImpactOverlay) the level is driven to the data less the decaying amount taken, so the
-// liquidity comes back gradually. Adjacent synthetic orders with no strategy order between them are merged,
+// liquidity comes back gradually. With permanent impact (P6.6) every data price is moved by shift() ticks;
+// a new shift moves the whole synthetic book at once (the overlay's entries are dropped). Adjacent synthetic orders with no strategy order between them are merged,
 // which no queue model can tell apart.
 #include "impact.hpp"
 #include "queue_models.hpp"
@@ -38,6 +39,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace sim {
@@ -76,6 +78,7 @@ struct SynthStats {
     // Impact overlay (P6.1)
     int64_t impact_taken_qty = 0;      // synthetic liquidity strategy taker fills consumed (tau > 0 only)
     int64_t impact_held_qty = 0;       // held back from the data when levels changed, summed over changes
+    uint64_t shifts = 0;               // permanent impact (P6.6): times the shift changed
 };
 
 class Synthesizer {
@@ -91,7 +94,13 @@ public:
     void strategy_trades(const std::vector<Trade>& trades);
     const ImpactOverlay& impact() const { return impact_; }
 
-    // What the data says (ticks and lots), as of the last batch; empty while not synced
+    // Permanent impact (P6.6): from now on every data price is moved by ticks. The synthetic book moves at
+    // once: levels that no longer match go, the moved ones are added at the back (crossing strategy orders
+    // trade with them, as on any data change).
+    void set_shift(int64_t ticks);
+    int64_t shift() const { return shift_; }
+
+    // What the data says (ticks and lots, moved by shift()), as of the last batch; empty while not synced
     const L2Book& data() const { return data_; }
     // A snapshot has established the book and no gap has happened since
     bool synced() const { return synced_; }
@@ -149,6 +158,8 @@ private:
     ImpactOverlay impact_;
 
     // Scratch, reused across batches
+    int64_t shift_ = 0;  // ticks every data price is moved by (P6.6)
+    std::vector<std::pair<uint8_t, Level>> moved_;
     std::vector<Change> changes_;
     std::vector<int64_t> after_decreases_;  // per change: synthetic quantity after the decreases
     std::vector<int64_t> targets_;          // per change: target_qty, computed once

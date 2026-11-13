@@ -122,6 +122,7 @@ graph TD
 | `L2Book` / `Reconstructor` | Pure level book from the data (no engine); top-N dumps for V0 | `src/sim/l2_book.hpp`, `src/sim/reconstruct.*` | P3.5 |
 | `Synthesizer` | Turns data events into engine operations on synthetic `MARKET` orders | `src/sim/synthesizer.*` | P3.6 |
 | `ImpactOverlay` | Holds back liquidity a strategy's taker fills took, decaying with half-life τ | `src/sim/impact.*` | P6.1 |
+| `PermanentImpact` | Optional square-root mid shift from the strategies' net taken quantity (off by default) | `src/sim/impact.*` | P6.6 |
 | `RiskGuard` | A strategy's own pre-trade limits and drawdown kill switch, before the latency pipe | `src/sim/risk_guard.*` | P6.4 |
 | `QueueModel`s | Choose which synthetic quantity an unexplained decrease removes | `src/sim/queue_models.hpp` | P3.7 |
 | `LatencyModel`s | Feed, entry and ack delays; FIFO per connection | `src/sim/latency_models.hpp` | P3.8 |
@@ -334,6 +335,13 @@ If a depth event arrives *before* the trade it reflects, the decrease is treated
   - The strategy's observed book never shows the impact: like a live feed, it shows the market's data.
   - `run_meta.json` records `simulator.impact_half_life_ms` and `synthesizer.impact_taken_qty`.
   - The decay uses floating point, so runs with τ > 0 may differ between compilers in rare last-lot roundings; the pinned determinism hashes (§14) are τ = 0 runs.
+- **Permanent impact (P6.6, off by default; for execution-algorithm research).** The overlay above is temporary: it never moves the mid. With `impact.permanent_coefficient` Y > 0, the net quantity X the strategies took from synthetic liquidity (buys +, sells −; the same takes the overlay counts) moves the whole market by the square-root law:
+  - shift / price = sign(X) · Y · σ · √(\|X\| / V), σ = `impact.daily_volatility`, V = `impact.daily_volume` (base units; both required with Y). It is rounded to whole ticks at the price of the latest take and doesn't decay: selling back what was bought brings it back to 0.
+  - The synthesizer moves every data price by the shift: when it changes (at the take, on the exchange's time), the whole synthetic book moves at once; levels that no longer match go, the moved ones join at the back, and a moved level that crosses a resting strategy order trades with it (§8.2's crossing fill). The overlay's entries are dropped. Later data lands moved.
+  - Each data batch carries the shift it was applied under, so a strategy's observed book (and its trades) show the moved market after feed latency, as a live feed would.
+  - What moves with it: the synthesizer's data book, so `bbo_samples.csv`'s data columns and the mark (`final_mark`, the PnL). What doesn't: the `.bse` data, which analytics read for mids. So TCA measures a fill against the market the data recorded, and the cost includes the impact, while the marked PnL credits a buyer with the rise it caused (a paper gain): for execution research read the cost, not the marked PnL.
+  - `run_meta.json`: `simulator.permanent_impact` (null when off): the settings, `net_taken_qty`, `final_shift`, `max_abs_shift` (quote units) and `shifts`.
+  - On the fixture (Y = 1, σ = 2.5%, V = 20,000 BTC), a 50-slice TWAP buy of 25 BTC ends with the market 71.38 USDT higher and pays 46.78 USDT per BTC more over the data mid than with Y = 0 (`tests/python/test_permanent_impact.py`).
 
 ### 8.4 Invariants
 
@@ -640,7 +648,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
               "ack": {"model": "constant", "us": 2000}},
   "latency_regime": {"window_ms": 1000, "curve": [[500, 1], [2000, 2], [10000, 5]], "channels": ["feed", "entry", "ack"]},
   "queue_model": {"model": "cancel_from_back"},
-  "impact": {"half_life_ms": 0},
+  "impact": {"half_life_ms": 0, "permanent_coefficient": 0, "daily_volatility": 0, "daily_volume": "0"},
   "fees": {"maker_rate": "0.001", "taker_rate": "0.001"},
   "limits": {"orders_per_10s": 100, "open_orders": 200},
   "risk": {"max_position": "0.01", "max_order_notional": "1000", "max_open_orders": 4, "max_drawdown": "50"},
@@ -676,7 +684,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 - **Dataset:** a packed dataset directory (its `manifest.json` gives the symbol's file and SHA-256; `symbol` is required when there are several) or a `.bse` file. The header is validated, and its symbol must match `symbol`.
 - **Times:** ns, `"YYYY-MM-DD"` (midnight UTC) or `"YYYY-MM-DDTHH:MM:SS[.fffffffff]Z"`. The resolved config holds them at full ns precision, and it resolves to itself (tested), so a run's `run_meta.json` can be run again as is.
 - **Fee rates** are exact decimal strings (or numbers); negative rates are rebates.
-- **Impact:** `impact.half_life_ms` is τ ≥ 0 (§8.3); 0 is the default.
+- **Impact:** `impact.half_life_ms` is τ ≥ 0 (§8.3); 0 is the default. `impact.permanent_coefficient` Y ≥ 0 turns on permanent impact (0, the default, is off); with it, `daily_volatility` (a fraction) and `daily_volume` (base units, a decimal string) must be positive.
 - **Queue models:** a name (`"prob_power:2"`) or `{"model": "prob_power", "n": 2}`.
 
 ### 13.2 `bs_sim`
@@ -853,6 +861,7 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P6.3 | Regime latency: delays scaled by the market's recent message rate (§10) | done |
 | P6.4 | RiskGuard: position, order notional and open-order limits and a drawdown kill switch, before the latency pipe (§11.2) | done |
 | P6.5 | Gap policies: halt (default), flatten at the resync, continue (§11.2) | done |
+| P6.6 | Permanent impact: square-root mid shift from the strategies' net taken quantity, off by default (§8.3) | done |
 
 ---
 
@@ -880,7 +889,8 @@ src/sim/
   reconstruct.hpp/.cpp    reconstruction mode: checkpoints, top-N dumps; slice (P3.17)
   queue_models.hpp        five cancel-placement models (P3.7)
   synthesizer.hpp/.cpp    L2 -> L3 into the engine; consistency checks (P3.6)
-  impact.hpp/.cpp         ImpactOverlay: taker fills' consumed liquidity, decaying with half-life tau (P6.1)
+  impact.hpp/.cpp         ImpactOverlay: taker fills' consumed liquidity, decaying with half-life tau (P6.1);
+                          PermanentImpact: square-root mid shift (P6.6)
   latency_models.hpp      constant/normal/lognormal/empirical, FIFO channels, stream_rng (P3.8)
   observed_book.hpp/.cpp  the strategy's delayed L2 view (P3.9)
   strategy.hpp            Strategy, Context, Account, OpenOrder, RequestReject (P3.10)
@@ -916,7 +926,7 @@ CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable
 - **No passive impact:** strategy quotes don't change other participants' behaviour.
 - **L2 data:** queue positions inside a level are modelled, not observed (that's what the queue models are for).
 - **Depth is 100 ms aggregates:** changes within 100 ms are invisible. Netting handles the trade/depth overlap, but very short-lived liquidity is lost.
-- **Taker impact** lasts until the data next changes the level (τ = 0, the default), or decays with half-life τ (P6.1; §8.3). It is temporary only: the mid never shifts because of a strategy's trades.
+- **Taker impact** lasts until the data next changes the level (τ = 0, the default), or decays with half-life τ (P6.1; §8.3). By default it is temporary only: the mid never shifts because of a strategy's trades; the optional permanent impact (P6.6) is a square-root model with assumed σ and V, not a calibrated one.
 - **Trade-through fills:** a strategy order priced better than a historical trade is filled by it, up to the trade's quantity.
 - **`ts_local` includes this PC's network delay.** Recordings from a Tokyo VPS give more realistic timing (see [recorder_ops.md](recorder_ops.md)).
 - **Gaps:** no matching against the book during a gap; trades during gaps are informational.
@@ -929,7 +939,7 @@ CMake targets: `sim` (static library, links `engine_core`), `bs_sim` (executable
 
 - **More symbols per run:** one replayer per file merged through the EventQueue; accounts per asset.
 - **Live mode (L-phases, [live_platform_architecture.md](live_platform_architecture.md)):** the same synthesizer fed by the WebSocket instead of the replayer turns the live mirror into the backtest's code path, which is the basis of V5.
-- **Market impact models** beyond the overlay (square-root law) for execution research.
+- **Market impact models** beyond the overlay and the square-root shift: decaying (transient) permanent impact, impact calibrated from the data.
 
 ## 21. Glossary
 

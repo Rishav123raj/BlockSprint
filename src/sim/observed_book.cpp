@@ -19,9 +19,11 @@ void ObservedBook::apply(const Batch& batch, uint64_t seen_at) {
     ++batches_;
     data_time_ = batch.ts_local();
     seen_at_ = seen_at;
+    shift_ = batch.shift;
     switch (batch.kind) {
         case BatchKind::TRADE:
             last_trade_ = trade_event(*batch.begin, tick_, lot_);
+            last_trade_->price += shift_ * tick_;
             break;
         case BatchKind::GAP:
             book_.clear();
@@ -46,7 +48,7 @@ std::optional<BookLevel> ObservedBook::to_level(const std::optional<Level>& l) c
     if (!l) {
         return std::nullopt;
     }
-    return BookLevel{l->px * tick_, l->qty * lot_};
+    return BookLevel{(l->px + shift_) * tick_, l->qty * lot_};
 }
 
 std::optional<BookLevel> ObservedBook::best_bid() const { return to_level(book_.best_bid()); }
@@ -57,14 +59,14 @@ Quantity ObservedBook::qty(Side side, Price price) const {
     if (price % tick_ != 0) {
         return 0;
     }
-    return book_.qty(side == Side::BUY ? 0 : 1, price / tick_) * lot_;
+    return book_.qty(side == Side::BUY ? 0 : 1, price / tick_ - shift_) * lot_;
 }
 
 void ObservedBook::top(Side side, size_t n, std::vector<BookLevel>& out) const {
     book_.top(side == Side::BUY ? 0 : 1, n, scratch_);
     out.clear();
     for (const Level& l : scratch_) {
-        out.push_back(BookLevel{l.px * tick_, l.qty * lot_});
+        out.push_back(BookLevel{(l.px + shift_) * tick_, l.qty * lot_});
     }
 }
 

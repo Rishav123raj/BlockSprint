@@ -17,10 +17,53 @@
 //
 // Prices are data ticks, quantities 1e-8 units; sides are data sides (0 bid, 1 ask), the side of the
 // resting liquidity that was taken.
+//
+// PermanentImpact (P6.6, off by default): the square-root law, for execution-algorithm research. The net
+// quantity X the strategies took from the market's liquidity (buys +, sells -) moves the whole market by
+//
+//   shift / price = sign(X) * Y * sigma * sqrt(|X| / V)
+//
+// Y the coefficient (of order 1), sigma the daily volatility, V the daily volume (base units). The shift is
+// rounded to whole ticks at the price of the latest take, and doesn't decay: selling back what was bought
+// brings it back to 0. The synthesizer moves every data level by it.
+#include "models.hpp"
+
 #include <cstdint>
 #include <unordered_map>
 
 namespace sim {
+
+struct PermanentImpactConfig {
+    double coefficient = 0;       // Y; 0 disables
+    double daily_volatility = 0;  // sigma, e.g. 0.025 for 2.5% a day
+    int64_t daily_volume = 0;     // V, 1e-8 base units
+    bool enabled() const { return coefficient > 0; }
+};
+
+class PermanentImpact {
+public:
+    // Throws std::invalid_argument when enabled without a positive volatility, volume and tick size
+    PermanentImpact(PermanentImpactConfig config, int64_t tick_size);
+
+    bool enabled() const { return config_.enabled(); }
+    const PermanentImpactConfig& config() const { return config_; }
+
+    // A strategy took qty (1e-8 units) of the market's liquidity at price as the aggressor; returns the new
+    // shift in ticks
+    int64_t take(Side aggressor, int64_t qty, Price price);
+
+    int64_t net_qty() const { return net_; }      // X, 1e-8 units
+    double fraction() const;                      // shift / price
+    int64_t shift_ticks() const { return shift_; }
+    int64_t max_abs_shift_ticks() const { return max_abs_shift_; }
+
+private:
+    PermanentImpactConfig config_;
+    int64_t tick_;
+    int64_t net_ = 0;
+    int64_t shift_ = 0;
+    int64_t max_abs_shift_ = 0;
+};
 
 class ImpactOverlay {
 public:
