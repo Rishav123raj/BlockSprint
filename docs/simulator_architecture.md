@@ -256,7 +256,7 @@ A batch is applied atomically, so no strategy ever sees a book in the middle of 
 
 ### 6.3 Segments and gaps
 
-A `GAP` record means updates were lost, or the feed went silent (normalizer, data_pipeline.md). It sits at the last good update, so the book is never shown as live through an outage. The book is flushed: synthetic orders are cancelled, while strategy orders stay resting. The strategy gets `on_gap`, and nothing is matched against the book until the next snapshot re-establishes it. Trades during the gap are still replayed into the tape, but they don't consume synthetic liquidity (there is none).
+A `GAP` record means updates were lost, or the feed went silent (normalizer, data_pipeline.md). It sits at the last good update, so the book is never shown as live through an outage. The book is flushed: synthetic orders are cancelled, while strategy orders stay resting. The strategy gets `on_gap`, and nothing is matched against the book until the next snapshot re-establishes it. Trades during the gap are still replayed into the tape, but they don't consume synthetic liquidity (there is none). What the strategy's session does about it is its gap policy (§11.2, P6.5): by default it halts.
 
 Day-start synthetic snapshots (`FLAG_SYNTHETIC_SNAPSHOT`) and resync snapshots are **reconciled** against the current synthetic book rather than replacing it, so strategy queue positions survive a day boundary (§8.5).
 
@@ -487,6 +487,13 @@ public:
 - A refused new order gets a `REJECTED` report, an amend or replace an `on_reject`, both **at once** (no latency; the order is recorded as sent with `arrive_ns = sent_ns`). Cancels always pass, and so does an amend that doesn't increase quantity or move the price.
 - The four reasons are new in `ExecReason`. `run_meta.json` per session: `risk_rejects`, `risk_killed_at` (0: never), `max_drawdown` (the largest fall seen, when the kill switch is set). `risk.limits()` counts them as `rejects_risk_guard`.
 
+**Gap policy (P6.5, config `gap_policy`).** What a session does when its feed reports lost updates. It acts when the strategy sees the `GAP` (after feed latency, as a feed handler noticing a sequence break would), before `on_gap`; it ends when a snapshot makes the strategy's book valid again, before that snapshot's `on_book`.
+- `halt` (default): every open order is cancelled (through the normal latency), and new orders, replaces and amends that increase quantity or move the price are refused at once with `gap_halted` until the resync. Cancels pass.
+- `flatten`: `halt`, and at the resync a MARKET order closes the position the strategy knows. It is sent at the resync, not at the gap: during a gap the simulator doesn't know the market, so nothing could price it. The RiskGuard doesn't check it (it is the risk system's own order).
+- `continue`: nothing; the strategy's `on_gap` decides. For testing, and for the golden scenarios, which script every request.
+- A strategy that handles gaps itself (the PassiveQuoter cancels its quotes on `on_gap` and quotes nothing while the book is invalid) runs the same under `halt` and `continue`: the policy's cancels go first and the strategy finds its orders already pending cancel.
+- `run_meta.json` per session: `gap_halts`, `gap_rejects`, `halted_ms` (up to the end if still halted), `flatten_orders`. `risk.limits()` counts the refusals as `rejects_gap_halt`. On Nov 10, BTCUSDT loses updates three times (14:31:38, resync after 13.7 s; 15:44:15, 13.0 s; 15:44:36, 22.7 s); the committed fixture has no gap.
+
 **Exchange side** (at the request's arrival time):
 - **Request weight (P6.2):** every request pays its Binance REST weight against `limits.request_weight_per_min` (default 6000, in fixed UTC minutes, like the `X-MBX-USED-WEIGHT-1M` counter): new order 1, cancel 1, cancel-replace 1, amend keep-priority 4. A request that doesn't fit is refused before anything else and charges nothing: a new order gets a `REJECTED` report (`rate_limit`), a cancel / amend / replace an `on_reject` with reason `rate_limit`. It is counted in the session's `weight_limited`. Weight is per session (one connection), not per IP.
 - **New orders and replaces** count against the session's limits: orders per 10 s (sliding window, default 100) and per day (UTC, default 200,000). An order over a limit gets a `REJECTED` report (`rate_limit`) without reaching the engine. A new order also needs a free slot: open orders per symbol (default 200), else `REJECTED` (`max_open_orders`). Both reasons are new in `ExecReason`. The gateway's own rejects carry `seq` 0.
@@ -637,6 +644,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   "fees": {"maker_rate": "0.001", "taker_rate": "0.001"},
   "limits": {"orders_per_10s": 100, "open_orders": 200},
   "risk": {"max_position": "0.01", "max_order_notional": "1000", "max_open_orders": 4, "max_drawdown": "50"},
+  "gap_policy": "halt",
   "strategy": {"name": "passive_quoter", "params": {"size": "0.001", "refresh_ms": 500}},
   "output": {"dir": "results/run_001", "sample_ms": 1000}
 }
@@ -652,7 +660,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   - An override value is parsed as JSON when it is valid JSON, otherwise taken as a string (times, names, paths). `null` is taken as the string "null" (the `null` strategy).
 - **Unknown keys are errors** (`unknown key 'window.form'`), including inside latency models. Every other error names its key too.
 - **Defaults:**
-  - fees 0.1% / 0.1% (Binance regular); limits 100 per 10 s, 200,000 per day, 200 open, request weight 6000 per minute; no risk limits;
+  - fees 0.1% / 0.1% (Binance regular); limits 100 per 10 s, 200,000 per day, 200 open, request weight 6000 per minute; no risk limits; gap policy halt;
   - `cancel_from_back`, `data_first`, seed 0, the whole file, no warm-up;
   - owner `S1`, output `results/run` sampled every 1000 ms.
 - **What a run must name:** a `dataset`, a `strategy.name`, and latency (a preset or all three models). Optimistic zero latency is never a silent default.
@@ -844,6 +852,7 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P6.2 | Rate limits: request weight per minute on top of the P3.10 order-count limits (§11) | done |
 | P6.3 | Regime latency: delays scaled by the market's recent message rate (§10) | done |
 | P6.4 | RiskGuard: position, order notional and open-order limits and a drawdown kill switch, before the latency pipe (§11.2) | done |
+| P6.5 | Gap policies: halt (default), flatten at the resync, continue (§11.2) | done |
 
 ---
 

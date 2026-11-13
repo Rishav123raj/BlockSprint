@@ -13,6 +13,22 @@ const char* request_name(RequestReject::Request r) {
     return "unknown";
 }
 
+const char* gap_policy_name(GapPolicy p) {
+    switch (p) {
+        case GapPolicy::HALT: return "halt";
+        case GapPolicy::FLATTEN: return "flatten";
+        case GapPolicy::CONTINUE: return "continue";
+    }
+    return "unknown";
+}
+
+GapPolicy parse_gap_policy(const std::string& name) {
+    for (GapPolicy p : {GapPolicy::HALT, GapPolicy::FLATTEN, GapPolicy::CONTINUE}) {
+        if (name == gap_policy_name(p)) return p;
+    }
+    throw std::invalid_argument("unknown gap policy '" + name + "' (halt, flatten or continue)");
+}
+
 int64_t Account::pnl(Price mark) const {
     const int64_t value = position >= 0 ? notional_for(mark, position) : -notional_for(mark, -position);
     return cash + value - fees;
@@ -78,7 +94,9 @@ public:
         r.stp = stp;
         // Checked against the strategy's other orders, before this one joins them
         RiskVerdict verdict;
-        if (risk_.limits().any()) {
+        if (halted_) {
+            verdict = halt_verdict();
+        } else if (risk_.limits().any() && !flattening_) {
             verdict = risk_.check_order(side, type, price, quantity, known_account_, known_orders_, book_);
         }
         OpenOrder& o = known_orders_[r.order_id];
@@ -93,7 +111,7 @@ public:
         ++stats_.orders_sent;
         OrderId id = r.order_id;
         if (!verdict.ok()) {
-            ++stats_.risk_rejects;
+            ++(halted_ ? stats_.gap_rejects : stats_.risk_rejects);
             r.sent_at = now();
             if (gw_.listener_) gw_.listener_->on_request(index_, r, r.sent_at);
             reject_order(r, verdict.reason, verdict.text, true);
@@ -131,11 +149,15 @@ public:
         r.quantity = new_total;
         r.new_price = new_price;
         ++stats_.amends_sent;
-        if (risk_.limits().any()) {
+        if (halted_ || risk_.limits().any()) {
             if (auto it = known_orders_.find(id); it != known_orders_.end()) {
                 const OpenOrder& o = it->second;
                 const Quantity leaves = new_total - o.filled;
                 if (leaves > o.leaves || (new_price && *new_price != o.price)) {
+                    if (halted_) {
+                        refuse(r, RequestReject::Request::AMEND, halt_verdict());
+                        return;
+                    }
                     const RiskVerdict v = risk_.check_order(o.side, o.type, new_price.value_or(o.price), leaves,
                                                             known_account_, known_orders_, book_, &id);
                     if (!v.ok()) {
@@ -158,6 +180,10 @@ public:
         describe(r);
         r.stp = StpPolicy::CANCEL_MAKER;
         ++stats_.replaces_sent;
+        if (halted_ && known_orders_.count(id)) {
+            refuse(r, RequestReject::Request::REPLACE, halt_verdict());
+            return;
+        }
         if (risk_.limits().any() && known_orders_.count(id)) {
             const RiskVerdict v = risk_.check_order(r.side, r.order_type, price, quantity, known_account_,
                                                     known_orders_, book_, &id);
@@ -182,6 +208,11 @@ public:
     void deliver_md(const Batch& batch) {
         ++stats_.md_batches;
         book_.apply(batch, now());
+        if (batch.kind == BatchKind::GAP) {
+            on_feed_gap();
+        } else if (halted_ && book_.valid()) {
+            resume();
+        }
         check_drawdown();
         switch (batch.kind) {
             case BatchKind::TRADE:
@@ -380,6 +411,7 @@ public:
     size_t exchange_open_orders() const { return exchange_open_.size(); }
     SessionStats stats() const {
         SessionStats s = stats_;
+        if (halted_) s.halted_ns += now() - halted_since_;
         s.held_back = feed_.held_back() + entry_.held_back() + ack_.held_back();
         return s;
     }
@@ -387,7 +419,7 @@ public:
 private:
     // A request the RiskGuard refused: recorded as sent, refused at once (no latency)
     void refuse(Request& r, RequestReject::Request kind, const RiskVerdict& v) {
-        ++stats_.risk_rejects;
+        ++(v.reason == ExecReason::GAP_HALTED ? stats_.gap_rejects : stats_.risk_rejects);
         r.sent_at = now();
         if (gw_.listener_) gw_.listener_->on_request(index_, r, r.sent_at);
         reject_request(kind, r.order_id, v.reason, v.text, true);
@@ -398,13 +430,44 @@ private:
         if (!risk_.limits().max_drawdown || !can_trade()) return;
         if (risk_.update(known_account_, book_, now())) {
             stats_.risk_killed_at = risk_.killed_at();
-            std::vector<OrderId> ids;
-            for (const auto& [id, o] : known_orders_) {
-                if (o.status != OrderStatus::PENDING_CANCEL) ids.push_back(id);
-            }
-            for (const auto& id : ids) cancel(id);
+            cancel_all();
         }
         stats_.max_drawdown = risk_.max_drawdown_seen();
+    }
+
+    void cancel_all() {
+        std::vector<OrderId> ids;
+        for (const auto& [id, o] : known_orders_) {
+            if (o.status != OrderStatus::PENDING_CANCEL) ids.push_back(id);
+        }
+        for (const auto& id : ids) cancel(id);
+    }
+
+    static RiskVerdict halt_verdict() {
+        return RiskVerdict{ExecReason::GAP_HALTED, "trading halted: market data gap, waiting for a snapshot"};
+    }
+
+    // The strategy's feed lost updates: halt until a snapshot makes its book valid again
+    void on_feed_gap() {
+        if (cfg_.gap == GapPolicy::CONTINUE) return;
+        if (!halted_) {
+            halted_ = true;
+            halted_since_ = now();
+            ++stats_.gap_halts;
+        }
+        if (can_trade()) cancel_all();
+    }
+
+    // The book is valid again: lift the halt; under flatten, first close the position at market
+    void resume() {
+        halted_ = false;
+        stats_.halted_ns += now() - halted_since_;
+        const Quantity pos = known_account_.position;
+        if (cfg_.gap != GapPolicy::FLATTEN || pos == 0 || !can_trade()) return;
+        flattening_ = true;  // the risk system's own order: the RiskGuard doesn't check it
+        send(pos > 0 ? Side::SELL : Side::BUY, OrderType::MARKET, 0, pos > 0 ? pos : -pos, StpPolicy::CANCEL_MAKER);
+        flattening_ = false;
+        ++stats_.flatten_orders;
     }
 
     void require_trading(const char* what) const {
@@ -542,6 +605,9 @@ private:
     const OrderId* amending_ = nullptr;  // the order of an amend being processed
 
     RiskGuard risk_;
+    bool flattening_ = false;  // sending the flatten order
+    bool halted_ = false;      // gap policy: waiting for a snapshot
+    uint64_t halted_since_ = 0;
     SessionStats stats_;
 };
 

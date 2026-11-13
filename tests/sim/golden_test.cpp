@@ -343,6 +343,7 @@ void run_golden(const Golden& g) {
         Runner runner(g, sim, model);
         SessionConfig sc = session("S1", g.latency_ms);
         sc.fees = g.fees;
+        sc.gap = GapPolicy::CONTINUE;  // the scenarios script every request; (g) keeps its order through a gap
         sim.add_strategy(runner, sc);
         sim.gateway().set_listener(&runner);
         sim.run();

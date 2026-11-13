@@ -39,6 +39,7 @@ struct Script : Strategy {
     std::function<void(Context&, const ExecReport&)> exec;
     std::function<void(Context&, const RequestReject&)> reject;
     std::function<void(Context&, uint64_t)> timer;
+    std::function<void(Context&)> gap;
     std::vector<std::string> log;
 
     std::string name() const override { return "script"; }
@@ -70,7 +71,10 @@ struct Script : Strategy {
         log.push_back(ms(ctx) + " timer " + std::to_string(id));
         if (timer) timer(ctx, id);
     }
-    void on_gap(Context& ctx) override { log.push_back(ms(ctx) + " gap"); }
+    void on_gap(Context& ctx) override {
+        log.push_back(ms(ctx) + " gap");
+        if (gap) gap(ctx);
+    }
 };
 
 // The engine, synthesizer and gateway with a minimal loop: what P3.11's simulator does, without the
@@ -125,6 +129,8 @@ struct Harness {
     void trade(uint64_t ms, uint8_t aggressor, int64_t px, int64_t lots) {
         data(BatchKind::TRADE, {rec(ms, bse::TRADE, aggressor, px, lots)});
     }
+
+    void gap(uint64_t ms) { data(BatchKind::GAP, {rec(ms, bse::GAP, 0, 0, 0, bse::LAST_IN_BATCH)}); }
 
     // Processes every event up to and including time ms
     void run_until(uint64_t ms) {
@@ -452,6 +458,97 @@ TEST_CASE("RiskGuard: the drawdown kill switch cancels everything, then only red
     CHECK(h.gw->stats(0).risk_killed_at == 51 * kMs);
     CHECK(h.gw->stats(0).risk_rejects == 2);
     CHECK(h.gw->stats(0).cancels_sent == 1);
+}
+
+TEST_CASE("gap policy: halt cancels and refuses until the snapshot; continue leaves it to the strategy") {
+    // t=0: bid 100.00 x 5, ask 100.10 x 2; the strategy bids 1 lot at 99.00. t=10: a gap; t=30: a snapshot.
+    // During the gap the strategy tries to bid again; after the resync it does.
+    auto scenario = [](GapPolicy policy, Harness& h, Script& s) {
+        auto resent = std::make_shared<bool>(false);
+        s.start = [](Context& ctx) { ctx.send(Side::BUY, OrderType::LIMIT, 9900 * kTick, kLot); };
+        s.gap = [](Context& ctx) { ctx.send(Side::BUY, OrderType::LIMIT, 9900 * kTick, kLot); };
+        s.book = [resent](Context& ctx, const ObservedBook& b) {
+            if (*resent || !b.valid() || ctx.now() < 30 * kMs) return;
+            *resent = true;
+            ctx.send(Side::BUY, OrderType::LIMIT, 9900 * kTick, kLot);
+        };
+        SessionConfig c = session("S1", 1);
+        c.gap = policy;
+        h.gw->add_session(s, c);
+        h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+        h.gap(10);
+        h.snapshot(30, {{BID, 10000, 5}, {ASK, 10010, 2}});
+        h.gw->start();
+        h.run_until(100);
+    };
+    SUBCASE("halt") {
+        Harness h;
+        Script s;
+        scenario(GapPolicy::HALT, h, s);
+        const std::vector<std::string> expected{"2 ack", "11 gap", "11 rejected(gap_halted)", "13 cancelled(user)",
+                                                "33 ack"};
+        CHECK(s.log == expected);  // the bid is cancelled, the one during the gap refused at once
+        const SessionStats st = h.gw->stats(0);
+        CHECK(st.gap_halts == 1);
+        CHECK(st.gap_rejects == 1);
+        CHECK(st.halted_ns == 20 * kMs);  // seen at 11, resynced at 31
+        CHECK(st.cancels_sent == 1);
+        CHECK(st.risk_rejects == 0);
+        CHECK(h.gw->exchange_open_orders(0) == 1);
+    }
+    SUBCASE("continue") {
+        Harness h;
+        Script s;
+        scenario(GapPolicy::CONTINUE, h, s);
+        const std::vector<std::string> expected{"2 ack", "11 gap", "13 ack", "33 ack"};
+        CHECK(s.log == expected);
+        CHECK(h.gw->stats(0).gap_halts == 0);
+        CHECK(h.gw->stats(0).halted_ns == 0);
+        CHECK(h.gw->exchange_open_orders(0) == 3);
+    }
+    SUBCASE("still halted at the end: the time so far counts") {
+        Harness h;
+        Script s;
+        SessionConfig c = session("S1", 1);
+        h.gw->add_session(s, c);
+        h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+        h.gap(10);
+        h.gw->start();
+        h.run_until(50);
+        CHECK(h.gw->stats(0).halted_ns == 39 * kMs);
+    }
+}
+
+TEST_CASE("gap policy: flatten closes the position at market when the book resyncs") {
+    // t=0: bid 100.00 x 5, ask 100.10 x 2. The strategy buys 2 x 1 lot at 100.10 and offers 1 lot at 101.00.
+    // t=10: a gap (the offer is cancelled); t=30: a snapshot at bid 99.00 / ask 99.10: it sells 2 lots there.
+    // Its notional limit (0.15) would refuse that 0.198 sell, but the flatten order is the risk system's own.
+    Harness h;
+    Script s;
+    s.start = [](Context& ctx) {
+        ctx.send(Side::BUY, OrderType::LIMIT, 10010 * kTick, kLot);
+        ctx.send(Side::BUY, OrderType::LIMIT, 10010 * kTick, kLot);
+        ctx.send(Side::SELL, OrderType::LIMIT, 10100 * kTick, kLot);
+    };
+    SessionConfig c = session("S1", 1);
+    c.gap = GapPolicy::FLATTEN;
+    c.risk.max_order_notional = 15000000;  // 0.15 quote
+    h.gw->add_session(s, c);
+    h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+    h.gap(10);
+    h.snapshot(30, {{BID, 9900, 5}, {ASK, 9910, 5}});
+    h.gw->start();
+    h.run_until(100);
+    const std::vector<std::string> expected{"2 ack", "2 fill 0.001@100.1 t=1", "2 ack", "2 fill 0.001@100.1 t=1",
+                                            "2 ack", "11 gap", "13 cancelled(user)", "33 ack",
+                                            "33 fill 0.002@99.0 t=32"};
+    CHECK(s.log == expected);
+    const SessionStats st = h.gw->stats(0);
+    CHECK(st.flatten_orders == 1);
+    CHECK(st.gap_halts == 1);
+    CHECK(st.risk_rejects == 0);
+    CHECK(h.gw->strategy_account(0).position == 0);
+    CHECK(h.gw->exchange_account(0).position == 0);
 }
 
 TEST_CASE("max open orders; a cancel frees a slot") {

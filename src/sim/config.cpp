@@ -111,7 +111,8 @@ json override_patch(const std::string& text) {
 const std::map<std::string, std::set<std::string>>& schema() {
     static const std::map<std::string, std::set<std::string>> keys{
         {"", {"description", "dataset", "symbol", "window", "seed", "tie_break", "latency_preset", "latency",
-              "latency_regime", "queue_model", "impact", "fees", "limits", "risk", "strategy", "output"}},
+              "latency_regime", "queue_model", "impact", "fees", "limits", "risk", "gap_policy", "strategy",
+              "output"}},
         {"window", {"from", "to", "warmup_s"}},
         {"latency", {"feed", "entry", "ack"}},
         {"latency.feed", {"model", "us", "mean_us", "sd_us", "median_us", "sigma", "file", "unit", "min_us", "max_us"}},
@@ -393,6 +394,7 @@ json default_run_config() {
         {"limits", {{"orders_per_10s", 100}, {"orders_per_day", 200000}, {"open_orders", 200},
                     {"request_weight_per_min", 6000}}},
         {"risk", {{"max_position", "0"}, {"max_order_notional", "0"}, {"max_open_orders", 0}, {"max_drawdown", "0"}}},
+        {"gap_policy", "halt"},
         {"strategy", {{"owner", "S1"}, {"params", json::object()}}},
         {"output", {{"dir", "results/run"}, {"sample_ms", 1000}}},
     };
@@ -432,6 +434,7 @@ SessionConfig RunConfig::session() const {
     c.fees = fees;
     c.limits = limits;
     c.risk = risk;
+    c.gap = gap;
     return c;
 }
 
@@ -505,6 +508,11 @@ RunConfig resolve_run_config(const json& file, const std::vector<std::string>& o
     rc.risk.max_order_notional = get_amount(r, "risk.max_order_notional");
     rc.risk.max_open_orders = get_u32(r, "risk.max_open_orders");
     rc.risk.max_drawdown = get_amount(r, "risk.max_drawdown");
+    try {
+        rc.gap = parse_gap_policy(get_string(r, "gap_policy"));
+    } catch (const std::invalid_argument& e) {
+        bad("gap_policy", e.what());
+    }
 
     rc.strategy_name = get_string(r, "strategy.name");
     if (rc.strategy_name.empty()) bad("strategy.name", "empty");

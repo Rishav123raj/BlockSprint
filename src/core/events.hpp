@@ -45,7 +45,9 @@ enum class ExecReason {
     RISK_POSITION,       // the position could exceed max_position if this and the side's open orders filled
     RISK_NOTIONAL,       // the order's notional is above max_order_notional
     RISK_OPEN_ORDERS,    // the strategy has max_open_orders open or pending orders
-    RISK_KILLED          // the drawdown kill switch is on and the order doesn't reduce the position
+    RISK_KILLED,         // the drawdown kill switch is on and the order doesn't reduce the position
+    // REJECTED by the simulator's gap policy (P6.5): trading is halted until the feed resyncs
+    GAP_HALTED
 };
 
 enum class Liquidity { NONE, MAKER, TAKER };
@@ -112,6 +114,7 @@ inline std::string execReasonToString(ExecReason reason) {
         case ExecReason::RISK_NOTIONAL: return "risk_notional";
         case ExecReason::RISK_OPEN_ORDERS: return "risk_open_orders";
         case ExecReason::RISK_KILLED: return "risk_killed";
+        case ExecReason::GAP_HALTED: return "gap_halted";
     }
     return "unknown";
 }

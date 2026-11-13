@@ -45,6 +45,7 @@ struct RunConfig {
     FeeSchedule fees{};
     GatewayLimits limits{};
     RiskLimits risk{};
+    GapPolicy gap = GapPolicy::HALT;
 
     // Outputs
     std::string output_dir;

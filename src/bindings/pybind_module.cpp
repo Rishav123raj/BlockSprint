@@ -215,7 +215,7 @@ py::dict result_codes() {
     for (int c = 0; c <= static_cast<int>(ExecType::REJECTED); ++c) v.push_back(execTypeToString(ExecType(c)));
     d["type"] = v;
     v.clear();
-    for (int c = 0; c <= static_cast<int>(ExecReason::RISK_KILLED); ++c) {
+    for (int c = 0; c <= static_cast<int>(ExecReason::GAP_HALTED); ++c) {
         v.push_back(execReasonToString(ExecReason(c)));
     }
     d["reason"] = v;
@@ -346,7 +346,8 @@ PYBIND11_MODULE(blocksprint_sim, m) {
         .value("RISK_POSITION", ExecReason::RISK_POSITION)
         .value("RISK_NOTIONAL", ExecReason::RISK_NOTIONAL)
         .value("RISK_OPEN_ORDERS", ExecReason::RISK_OPEN_ORDERS)
-        .value("RISK_KILLED", ExecReason::RISK_KILLED);
+        .value("RISK_KILLED", ExecReason::RISK_KILLED)
+        .value("GAP_HALTED", ExecReason::GAP_HALTED);
     py::enum_<Liquidity>(m, "Liquidity")
         .value("NONE", Liquidity::NONE)
         .value("MAKER", Liquidity::MAKER)

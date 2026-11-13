@@ -177,7 +177,8 @@ def limits(run: Any, position_limit: float | None = None, market: MarketData | N
     (limits.open_orders), samples_at_open_orders_limit (share of samples),
     rejects_open_orders (orders refused for the open-order limit), rejects_rate_limit (every request refused
     for the order-count or request-weight limits: orders, and cancels / amends / replaces) and rejects_risk_guard
-    (every request the strategy's own RiskGuard refused: risk_position / notional / open_orders / killed)."""
+    (every request the strategy's own RiskGuard refused: risk_position / notional / open_orders / killed) and
+    rejects_gap_halt (every request refused while its gap policy halted trading)."""
     import polars as pl
 
     from research.analytics.tca import rejects
@@ -205,6 +206,7 @@ def limits(run: Any, position_limit: float | None = None, market: MarketData | N
         reasons = dict(mine_rj.filter(pl.col("kind") == "order").select("reason", "count").iter_rows())
         rate = int(mine_rj.filter(pl.col("reason") == "rate_limit")["count"].sum())
         guard = int(mine_rj.filter(pl.col("reason").str.starts_with("risk_"))["count"].sum())
+        halted = int(mine_rj.filter(pl.col("reason") == "gap_halted")["count"].sum())
         rows.append({
             "owner": name, "position_limit": position_limit, "time_at_position_limit": at,
             "max_abs_position": float(np.abs(values).max()),
@@ -213,6 +215,7 @@ def limits(run: Any, position_limit: float | None = None, market: MarketData | N
             "rejects_open_orders": int(reasons.get("max_open_orders", 0)),
             "rejects_rate_limit": rate,
             "rejects_risk_guard": guard,
+            "rejects_gap_halt": halted,
         })
     return pl.DataFrame(rows, schema_overrides={"position_limit": pl.Float64, "time_at_position_limit": pl.Float64,
                                                 "open_orders_limit": pl.Int64,

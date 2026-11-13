@@ -44,7 +44,7 @@ sweep:
 results: results                      # the store's root
 ```
 
-- **Simulator settings** are the run-config format of `bs_sim` (`docs/simulator_architecture.md` §13.1): `dataset`, `symbol`, `window`, `tie_break`, `latency_preset`, `latency`, `latency_regime`, `queue_model`, `impact`, `fees`, `limits` and `risk`. Unknown top-level keys are errors.
+- **Simulator settings** are the run-config format of `bs_sim` (`docs/simulator_architecture.md` §13.1): `dataset`, `symbol`, `window`, `tie_break`, `latency_preset`, `latency`, `latency_regime`, `queue_model`, `impact`, `fees`, `limits`, `risk` and `gap_policy`. Unknown top-level keys are errors.
 - **Sweep keys** are dotted paths into the run config, as `bs_sim run --set` takes them. `strategy.params.X` sets a strategy parameter, for C++ and Python strategies alike.
   - A value replaces whatever is at its key.
   - To sweep queue models that take parameters, sweep whole `queue_model` objects. Sweeping `queue_model.model` would keep the base's `n`, and `pro_rata` refuses an `n`.
