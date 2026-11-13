@@ -90,6 +90,7 @@ TEST_CASE("a minimal config gets the defaults; the dataset manifest gives the fi
     CHECK(rc.limits.max_open_orders == 200);
     CHECK(rc.limits.request_weight_per_min == 6000);
     CHECK_FALSE(rc.sim.latency_regime.enabled());
+    CHECK_FALSE(rc.risk.any());
     CHECK(rc.sim.latency_regime.window_ns == 1000000000ULL);
     CHECK(rc.strategy_name == "passive_quoter");
     CHECK(rc.owner == "S1");
@@ -113,7 +114,9 @@ TEST_CASE("precedence: defaults < preset < file < overrides; a model object nami
     cfg["fees"] = {{"maker_rate", "-0.0001"}};
     const RunConfig rc = resolve_run_config(cfg, {"seed=7", "latency.entry.median_us=5000", "strategy.params.size=\"0.002\"",
                                                   "impact.half_life_ms=2.5", "latency_regime.curve=[[500,1],[2000,2.5]]",
-                                                  "latency_regime.channels=[\"entry\",\"ack\"]"});
+                                                  "latency_regime.channels=[\"entry\",\"ack\"]",
+                                                  "risk.max_position=\"0.01\"", "risk.max_drawdown=25",
+                                                  "risk.max_open_orders=4"});
     const json& lat = rc.resolved["latency"];
     CHECK(lat["ack"] == json{{"model", "constant"}, {"us", 500}});         // the file's model, nothing of the preset's
     CHECK(lat["entry"]["model"] == "lognormal");                           // the preset's model ...
@@ -125,6 +128,11 @@ TEST_CASE("precedence: defaults < preset < file < overrides; a model object nami
     const LatencyRegimeConfig& lr = rc.sim.latency_regime;
     CHECK(lr.curve == std::vector<std::pair<double, double>>{{500.0, 1.0}, {2000.0, 2.5}});
     CHECK((!lr.feed && lr.entry && lr.ack));
+    CHECK(rc.risk.max_position == 1000000);
+    CHECK(rc.risk.max_drawdown == 2500000000LL);
+    CHECK(rc.risk.max_open_orders == 4);
+    CHECK(rc.risk.max_order_notional == 0);
+    CHECK(rc.session().risk.max_open_orders == 4);
     CHECK(rc.fees.maker_rate == -10000);   // a rebate
     CHECK(rc.fees.taker_rate == 100000);   // default
     CHECK(rc.strategy_params["size"] == "0.002");
@@ -242,6 +250,9 @@ TEST_CASE("errors name the key") {
     CHECK(contains(with("seed=1.5"), "seed"));
     CHECK(contains(with("impact.half_life_ms=-1"), "impact.half_life_ms"));
     CHECK(contains(with("latency_regime.window_ms=0"), "latency_regime.window_ms"));
+    CHECK(contains(with("risk.max_position=\"-1\""), "risk.max_position"));
+    CHECK(contains(with("risk.max_drawdown=\"0.000000001\""), "risk.max_drawdown"));
+    CHECK(contains(with("risk.max_loss=1"), "unknown key 'risk.max_loss'"));
     CHECK(contains(with("latency_regime.curve=[[2,1],[1,2]]"), "latency_regime.curve: latency regime: curve rates"));
     CHECK(contains(with("latency_regime.curve=[1,2]"), "latency_regime.curve"));
     CHECK(contains(with("latency_regime.channels=[\"order\"]"), "latency_regime.channels: 'order'"));

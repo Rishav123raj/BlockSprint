@@ -202,6 +202,7 @@ class Experiment(BaseModel):
     impact: dict[str, Any] | None = None
     fees: dict[str, Any] | None = None
     limits: dict[str, Any] | None = None
+    risk: dict[str, Any] | None = None
     sample_ms: int = Field(default=1000, ge=0)
     strategy: StrategySpec
     sweep: Sweep | None = None
@@ -272,7 +273,7 @@ class Experiment(BaseModel):
         """The run config before the sweep and the seed (output.dir is set per run by the runner)."""
         cfg: dict[str, Any] = {"dataset": self.dataset}
         for key in ("symbol", "tie_break", "latency_preset", "latency", "latency_regime", "queue_model", "impact", "fees",
-                    "limits"):
+                    "limits", "risk"):
             value = getattr(self, key)
             if value is not None:
                 cfg[key] = copy.deepcopy(value)

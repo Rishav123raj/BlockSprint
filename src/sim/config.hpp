@@ -44,6 +44,7 @@ struct RunConfig {
     std::shared_ptr<const LatencyModel> ack;
     FeeSchedule fees{};
     GatewayLimits limits{};
+    RiskLimits risk{};
 
     // Outputs
     std::string output_dir;

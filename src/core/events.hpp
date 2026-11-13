@@ -40,7 +40,12 @@ enum class ExecReason {
     POST_ONLY_WOULD_TAKE, // LIMIT_MAKER order (or amend) that would trade on arrival instead of resting
     // REJECTED by the simulator's gateway (P3.10), before the engine
     RATE_LIMIT,          // too many orders in the window (Binance: orders per 10 s / per day)
-    MAX_OPEN_ORDERS      // the participant already has the maximum number of open orders on the symbol
+    MAX_OPEN_ORDERS,     // the participant already has the maximum number of open orders on the symbol
+    // REJECTED by the strategy's own RiskGuard (P6.4), before the latency pipe
+    RISK_POSITION,       // the position could exceed max_position if this and the side's open orders filled
+    RISK_NOTIONAL,       // the order's notional is above max_order_notional
+    RISK_OPEN_ORDERS,    // the strategy has max_open_orders open or pending orders
+    RISK_KILLED          // the drawdown kill switch is on and the order doesn't reduce the position
 };
 
 enum class Liquidity { NONE, MAKER, TAKER };
@@ -103,6 +108,10 @@ inline std::string execReasonToString(ExecReason reason) {
         case ExecReason::POST_ONLY_WOULD_TAKE: return "post_only_would_take";
         case ExecReason::RATE_LIMIT: return "rate_limit";
         case ExecReason::MAX_OPEN_ORDERS: return "max_open_orders";
+        case ExecReason::RISK_POSITION: return "risk_position";
+        case ExecReason::RISK_NOTIONAL: return "risk_notional";
+        case ExecReason::RISK_OPEN_ORDERS: return "risk_open_orders";
+        case ExecReason::RISK_KILLED: return "risk_killed";
     }
     return "unknown";
 }

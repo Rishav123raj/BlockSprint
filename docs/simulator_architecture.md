@@ -122,6 +122,7 @@ graph TD
 | `L2Book` / `Reconstructor` | Pure level book from the data (no engine); top-N dumps for V0 | `src/sim/l2_book.hpp`, `src/sim/reconstruct.*` | P3.5 |
 | `Synthesizer` | Turns data events into engine operations on synthetic `MARKET` orders | `src/sim/synthesizer.*` | P3.6 |
 | `ImpactOverlay` | Holds back liquidity a strategy's taker fills took, decaying with half-life τ | `src/sim/impact.*` | P6.1 |
+| `RiskGuard` | A strategy's own pre-trade limits and drawdown kill switch, before the latency pipe | `src/sim/risk_guard.*` | P6.4 |
 | `QueueModel`s | Choose which synthetic quantity an unexplained decrease removes | `src/sim/queue_models.hpp` | P3.7 |
 | `LatencyModel`s | Feed, entry and ack delays; FIFO per connection | `src/sim/latency_models.hpp` | P3.8 |
 | `ObservedBook` | The strategy's delayed L2 view | `src/sim/observed_book.*` | P3.9 |
@@ -478,6 +479,14 @@ public:
 - `send` assigns the ID `<owner>-<n>`, records the order as `PENDING_NEW` and queues an `ORDER_ARRIVE` at entry latency. `cancel` and `replace` mark the order `PENDING_CANCEL` / `PENDING_REPLACE`.
 - Reports and rejects arrive after ack latency, and only then change the strategy's open orders and account. At equal times a data event is delivered before a report (event class order), so a strategy that is picked off sees the trade, then its fill.
 
+**RiskGuard (P6.4, `src/sim/risk_guard.*`).** Each session can carry the strategy's own pre-trade limits (config `risk`, every limit off at 0). They are checked in the `Context`, before a request enters the entry latency, against what the strategy knows: its account, its open orders, its observed book.
+- `max_position`: the position if this order and every other open order on its side filled (a replace or amend replaces its order's quantity) → `risk_position`.
+- `max_order_notional`: price × quantity of one order; a MARKET order at the observed best opposite price → `risk_notional`.
+- `max_open_orders`: open and pending orders, for a new order (a replace isn't one) → `risk_open_orders`.
+- `max_drawdown`, the kill switch: after every book update and fill the strategy sees, its PnL at the observed mid (else the last trade) is compared with its running high, which starts at 0. When it falls `max_drawdown` below it, every open order is cancelled (through the normal latency) and from then on only orders that reduce the position pass: against it, and not past flat counting the open orders on their side. Anything else → `risk_killed`.
+- A refused new order gets a `REJECTED` report, an amend or replace an `on_reject`, both **at once** (no latency; the order is recorded as sent with `arrive_ns = sent_ns`). Cancels always pass, and so does an amend that doesn't increase quantity or move the price.
+- The four reasons are new in `ExecReason`. `run_meta.json` per session: `risk_rejects`, `risk_killed_at` (0: never), `max_drawdown` (the largest fall seen, when the kill switch is set). `risk.limits()` counts them as `rejects_risk_guard`.
+
 **Exchange side** (at the request's arrival time):
 - **Request weight (P6.2):** every request pays its Binance REST weight against `limits.request_weight_per_min` (default 6000, in fixed UTC minutes, like the `X-MBX-USED-WEIGHT-1M` counter): new order 1, cancel 1, cancel-replace 1, amend keep-priority 4. A request that doesn't fit is refused before anything else and charges nothing: a new order gets a `REJECTED` report (`rate_limit`), a cancel / amend / replace an `on_reject` with reason `rate_limit`. It is counted in the session's `weight_limited`. Weight is per session (one connection), not per IP.
 - **New orders and replaces** count against the session's limits: orders per 10 s (sliding window, default 100) and per day (UTC, default 200,000). An order over a limit gets a `REJECTED` report (`rate_limit`) without reaching the engine. A new order also needs a free slot: open orders per symbol (default 200), else `REJECTED` (`max_open_orders`). Both reasons are new in `ExecReason`. The gateway's own rejects carry `seq` 0.
@@ -627,6 +636,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   "impact": {"half_life_ms": 0},
   "fees": {"maker_rate": "0.001", "taker_rate": "0.001"},
   "limits": {"orders_per_10s": 100, "open_orders": 200},
+  "risk": {"max_position": "0.01", "max_order_notional": "1000", "max_open_orders": 4, "max_drawdown": "50"},
   "strategy": {"name": "passive_quoter", "params": {"size": "0.001", "refresh_ms": 500}},
   "output": {"dir": "results/run_001", "sample_ms": 1000}
 }
@@ -642,7 +652,7 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   - An override value is parsed as JSON when it is valid JSON, otherwise taken as a string (times, names, paths). `null` is taken as the string "null" (the `null` strategy).
 - **Unknown keys are errors** (`unknown key 'window.form'`), including inside latency models. Every other error names its key too.
 - **Defaults:**
-  - fees 0.1% / 0.1% (Binance regular); limits 100 per 10 s, 200,000 per day, 200 open, request weight 6000 per minute;
+  - fees 0.1% / 0.1% (Binance regular); limits 100 per 10 s, 200,000 per day, 200 open, request weight 6000 per minute; no risk limits;
   - `cancel_from_back`, `data_first`, seed 0, the whole file, no warm-up;
   - owner `S1`, output `results/run` sampled every 1000 ms.
 - **What a run must name:** a `dataset`, a `strategy.name`, and latency (a preset or all three models). Optimistic zero latency is never a silent default.
@@ -833,6 +843,7 @@ All 8 matched their hand-computed results on the first run, on MSVC and GCC. A d
 | P6.1 | Impact overlay: taker fills' consumed liquidity decays with half-life τ (§8.3) | done |
 | P6.2 | Rate limits: request weight per minute on top of the P3.10 order-count limits (§11) | done |
 | P6.3 | Regime latency: delays scaled by the market's recent message rate (§10) | done |
+| P6.4 | RiskGuard: position, order notional and open-order limits and a drawdown kill switch, before the latency pipe (§11.2) | done |
 
 ---
 
@@ -865,6 +876,7 @@ src/sim/
   observed_book.hpp/.cpp  the strategy's delayed L2 view (P3.9)
   strategy.hpp            Strategy, Context, Account, OpenOrder, RequestReject (P3.10)
   gateway.hpp/.cpp        sessions: latency channels, limits, routing, accounts (P3.10)
+  risk_guard.hpp/.cpp     RiskGuard: a strategy's pre-trade limits and drawdown kill switch (P6.4)
   simulator.hpp/.cpp      the event loop: fast-forward, window, warm-up, tie-break, sampler (P3.11)
   config.hpp/.cpp         run config: defaults, latency presets, overrides, dataset, times (P3.12)
   recorder.hpp/.cpp       CSV outputs, run_meta.json, output hash; run_inputs (P3.13)

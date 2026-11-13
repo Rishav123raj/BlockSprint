@@ -123,6 +123,7 @@ if(BLOCKSPRINT_BUILD_SIM)
         src/sim/impact.cpp
         src/sim/observed_book.cpp
         src/sim/gateway.cpp
+        src/sim/risk_guard.cpp
         src/sim/simulator.cpp
         src/sim/config.cpp
         src/sim/recorder.cpp

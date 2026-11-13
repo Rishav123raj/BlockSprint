@@ -354,6 +354,8 @@ json ResultRecorder::finish(const json& meta) {
              {{"orders_sent", ss.orders_sent}, {"cancels_sent", ss.cancels_sent}, {"amends_sent", ss.amends_sent},
               {"replaces_sent", ss.replaces_sent}, {"rate_limited", ss.rate_limited},
               {"weight_limited", ss.weight_limited}, {"open_limited", ss.open_limited},
+              {"risk_rejects", ss.risk_rejects}, {"risk_killed_at", ss.risk_killed_at},
+              {"max_drawdown", format_fixed(ss.max_drawdown)},
               {"request_rejects", ss.request_rejects}, {"reports", ss.reports}, {"md_batches", ss.md_batches},
               {"timers", ss.timers}, {"held_back", ss.held_back}}},
         });

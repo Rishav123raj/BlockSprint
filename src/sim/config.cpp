@@ -111,7 +111,7 @@ json override_patch(const std::string& text) {
 const std::map<std::string, std::set<std::string>>& schema() {
     static const std::map<std::string, std::set<std::string>> keys{
         {"", {"description", "dataset", "symbol", "window", "seed", "tie_break", "latency_preset", "latency",
-              "latency_regime", "queue_model", "impact", "fees", "limits", "strategy", "output"}},
+              "latency_regime", "queue_model", "impact", "fees", "limits", "risk", "strategy", "output"}},
         {"window", {"from", "to", "warmup_s"}},
         {"latency", {"feed", "entry", "ack"}},
         {"latency.feed", {"model", "us", "mean_us", "sd_us", "median_us", "sigma", "file", "unit", "min_us", "max_us"}},
@@ -122,6 +122,7 @@ const std::map<std::string, std::set<std::string>>& schema() {
         {"impact", {"half_life_ms"}},
         {"fees", {"maker_rate", "taker_rate"}},
         {"limits", {"orders_per_10s", "orders_per_day", "open_orders", "request_weight_per_min"}},
+        {"risk", {"max_position", "max_order_notional", "max_open_orders", "max_drawdown"}},
         {"strategy", {"name", "owner", "params"}},
         {"output", {"dir", "sample_ms"}},
     };
@@ -239,6 +240,22 @@ LatencyRegimeConfig latency_regime(const json& r) {
         bad("latency_regime.curve", e.what());
     }
     return c;
+}
+
+// A non-negative amount (base or quote units): decimal string (exact) or number
+int64_t get_amount(const json& j, const std::string& path) {
+    const json& v = at(j, path);
+    std::string text;
+    if (v.is_string()) {
+        text = v.get<std::string>();
+    } else if (v.is_number()) {
+        text = v.dump();
+    } else {
+        bad(path, "expected a decimal amount such as \"0.01\", got " + v.dump());
+    }
+    const auto parsed = parse_fixed(text);
+    if (!parsed || *parsed < 0) bad(path, "not a non-negative decimal with at most 8 places: " + text);
+    return *parsed;
 }
 
 // A fee rate: decimal string (exact) or number, may be negative (rebate)
@@ -375,6 +392,7 @@ json default_run_config() {
         {"fees", {{"maker_rate", "0.001"}, {"taker_rate", "0.001"}}},  // Binance spot, regular tier
         {"limits", {{"orders_per_10s", 100}, {"orders_per_day", 200000}, {"open_orders", 200},
                     {"request_weight_per_min", 6000}}},
+        {"risk", {{"max_position", "0"}, {"max_order_notional", "0"}, {"max_open_orders", 0}, {"max_drawdown", "0"}}},
         {"strategy", {{"owner", "S1"}, {"params", json::object()}}},
         {"output", {{"dir", "results/run"}, {"sample_ms", 1000}}},
     };
@@ -413,6 +431,7 @@ SessionConfig RunConfig::session() const {
     c.ack = ack;
     c.fees = fees;
     c.limits = limits;
+    c.risk = risk;
     return c;
 }
 
@@ -482,6 +501,10 @@ RunConfig resolve_run_config(const json& file, const std::vector<std::string>& o
     rc.limits.orders_per_day = get_u32(r, "limits.orders_per_day");
     rc.limits.max_open_orders = get_u32(r, "limits.open_orders");
     rc.limits.request_weight_per_min = get_u32(r, "limits.request_weight_per_min");
+    rc.risk.max_position = get_amount(r, "risk.max_position");
+    rc.risk.max_order_notional = get_amount(r, "risk.max_order_notional");
+    rc.risk.max_open_orders = get_u32(r, "risk.max_open_orders");
+    rc.risk.max_drawdown = get_amount(r, "risk.max_drawdown");
 
     rc.strategy_name = get_string(r, "strategy.name");
     if (rc.strategy_name.empty()) bad("strategy.name", "empty");

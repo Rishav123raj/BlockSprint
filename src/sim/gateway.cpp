@@ -54,7 +54,8 @@ public:
         : gw_(gw), index_(index), strategy_(strategy), cfg_(std::move(cfg)), book_(gw.tick_, gw.lot_),
           feed_(*cfg_.feed, stream_rng(gw.seed_, "feed/" + cfg_.owner)),
           entry_(*cfg_.entry, stream_rng(gw.seed_, "entry/" + cfg_.owner)),
-          ack_(*cfg_.ack, stream_rng(gw.seed_, "ack/" + cfg_.owner)) {}
+          ack_(*cfg_.ack, stream_rng(gw.seed_, "ack/" + cfg_.owner)),
+          risk_(cfg_.risk) {}
 
     // ---- Context (strategy side) ----
     uint64_t now() const override { return gw_.now(); }
@@ -75,6 +76,11 @@ public:
         r.price = price;
         r.quantity = quantity;
         r.stp = stp;
+        // Checked against the strategy's other orders, before this one joins them
+        RiskVerdict verdict;
+        if (risk_.limits().any()) {
+            verdict = risk_.check_order(side, type, price, quantity, known_account_, known_orders_, book_);
+        }
         OpenOrder& o = known_orders_[r.order_id];
         o.id = r.order_id;
         o.side = side;
@@ -86,6 +92,13 @@ public:
         o.sent_at = now();
         ++stats_.orders_sent;
         OrderId id = r.order_id;
+        if (!verdict.ok()) {
+            ++stats_.risk_rejects;
+            r.sent_at = now();
+            if (gw_.listener_) gw_.listener_->on_request(index_, r, r.sent_at);
+            reject_order(r, verdict.reason, verdict.text, true);
+            return id;
+        }
         to_exchange(std::move(r));
         return id;
     }
@@ -118,6 +131,20 @@ public:
         r.quantity = new_total;
         r.new_price = new_price;
         ++stats_.amends_sent;
+        if (risk_.limits().any()) {
+            if (auto it = known_orders_.find(id); it != known_orders_.end()) {
+                const OpenOrder& o = it->second;
+                const Quantity leaves = new_total - o.filled;
+                if (leaves > o.leaves || (new_price && *new_price != o.price)) {
+                    const RiskVerdict v = risk_.check_order(o.side, o.type, new_price.value_or(o.price), leaves,
+                                                            known_account_, known_orders_, book_, &id);
+                    if (!v.ok()) {
+                        refuse(r, RequestReject::Request::AMEND, v);
+                        return;
+                    }
+                }
+            }
+        }
         to_exchange(std::move(r));
     }
 
@@ -130,8 +157,16 @@ public:
         r.quantity = quantity;
         describe(r);
         r.stp = StpPolicy::CANCEL_MAKER;
-        mark_pending(id, OrderStatus::PENDING_REPLACE);
         ++stats_.replaces_sent;
+        if (risk_.limits().any() && known_orders_.count(id)) {
+            const RiskVerdict v = risk_.check_order(r.side, r.order_type, price, quantity, known_account_,
+                                                    known_orders_, book_, &id);
+            if (!v.ok()) {
+                refuse(r, RequestReject::Request::REPLACE, v);
+                return;
+            }
+        }
+        mark_pending(id, OrderStatus::PENDING_REPLACE);
         to_exchange(std::move(r));
     }
 
@@ -147,6 +182,7 @@ public:
     void deliver_md(const Batch& batch) {
         ++stats_.md_batches;
         book_.apply(batch, now());
+        check_drawdown();
         switch (batch.kind) {
             case BatchKind::TRADE:
                 strategy_.on_trade(*this, *book_.last_trade());
@@ -163,6 +199,7 @@ public:
 
     void deliver_exec(const ExecReport& r) {
         ++stats_.reports;
+        bool fill_seen = false;
         auto it = known_orders_.find(r.order_id);
         switch (r.type) {
             case ExecType::REJECTED:
@@ -185,6 +222,7 @@ public:
             }
             case ExecType::FILL:
                 known_account_.apply_fill(r);
+                fill_seen = true;
                 if (it != known_orders_.end()) {
                     if (r.leaves_qty == 0) {
                         known_orders_.erase(it);
@@ -204,6 +242,7 @@ public:
                 }
                 break;
         }
+        if (fill_seen) check_drawdown();
         strategy_.on_exec(*this, r);
     }
 
@@ -346,6 +385,28 @@ public:
     }
 
 private:
+    // A request the RiskGuard refused: recorded as sent, refused at once (no latency)
+    void refuse(Request& r, RequestReject::Request kind, const RiskVerdict& v) {
+        ++stats_.risk_rejects;
+        r.sent_at = now();
+        if (gw_.listener_) gw_.listener_->on_request(index_, r, r.sent_at);
+        reject_request(kind, r.order_id, v.reason, v.text, true);
+    }
+
+    // The drawdown kill switch: on tripping, cancel every open order
+    void check_drawdown() {
+        if (!risk_.limits().max_drawdown || !can_trade()) return;
+        if (risk_.update(known_account_, book_, now())) {
+            stats_.risk_killed_at = risk_.killed_at();
+            std::vector<OrderId> ids;
+            for (const auto& [id, o] : known_orders_) {
+                if (o.status != OrderStatus::PENDING_CANCEL) ids.push_back(id);
+            }
+            for (const auto& id : ids) cancel(id);
+        }
+        stats_.max_drawdown = risk_.max_drawdown_seen();
+    }
+
     void require_trading(const char* what) const {
         if (!can_trade()) {
             throw std::logic_error("strategy '" + cfg_.owner + "': " + what + " during the warm-up (trading starts at " +
@@ -369,22 +430,24 @@ private:
         gw_.queue_.push(arrive, EventClass::ORDER_ARRIVE, SimEvent{index_, std::move(r)});
     }
 
-    void to_strategy(const ExecReport& r) {
-        const uint64_t deliver = ack_.arrival(now(), gw_.latency_scale(Channel::ACK));
+    // local: refused by the RiskGuard, delivered now without latency
+    void to_strategy(const ExecReport& r, bool local = false) {
+        const uint64_t deliver = local ? now() : ack_.arrival(now(), gw_.latency_scale(Channel::ACK));
         if (gw_.listener_) {
             gw_.listener_->on_report(index_, r, deliver);
         }
         gw_.queue_.push(deliver, EventClass::STRATEGY_EXEC, SimEvent{index_, r});
     }
 
-    void reject_request(RequestReject::Request request, const OrderId& id, ExecReason reason, std::string text) {
+    void reject_request(RequestReject::Request request, const OrderId& id, ExecReason reason, std::string text,
+                        bool local = false) {
         RequestReject rr;
         rr.request = request;
         rr.order_id = id;
         rr.reason = reason;
         rr.text = std::move(text);
         rr.exchange_time = now();
-        const uint64_t deliver = ack_.arrival(now(), gw_.latency_scale(Channel::ACK));
+        const uint64_t deliver = local ? now() : ack_.arrival(now(), gw_.latency_scale(Channel::ACK));
         if (gw_.listener_) {
             gw_.listener_->on_request_reject(index_, rr, deliver);
         }
@@ -393,7 +456,7 @@ private:
 
     // A new order refused before the engine: one REJECTED report, as the engine would send (seq 0: it
     // isn't one of the engine's reports)
-    void reject_order(const Request& r, ExecReason reason, std::string text) {
+    void reject_order(const Request& r, ExecReason reason, std::string text, bool local = false) {
         ExecReport rep;
         rep.timestamp = now();
         rep.type = ExecType::REJECTED;
@@ -406,7 +469,7 @@ private:
         rep.order_type = r.order_type;
         rep.price = r.price;
         rep.quantity = r.quantity;
-        to_strategy(rep);
+        to_strategy(rep, local);
     }
 
     // Charges a request's weight to the current minute; false if it doesn't fit (and then charges nothing)
@@ -478,6 +541,7 @@ private:
     uint64_t weight_used_ = 0;  // request weight charged in the current minute
     const OrderId* amending_ = nullptr;  // the order of an amend being processed
 
+    RiskGuard risk_;
     SessionStats stats_;
 };
 

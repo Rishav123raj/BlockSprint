@@ -344,6 +344,116 @@ TEST_CASE("regime latency: delays rise with the market's message rate and fall b
     CHECK(r->max_multiplier() == 3.0);
 }
 
+SessionConfig with_risk(RiskLimits risk, double latency_ms = 1) {
+    SessionConfig c = session("S1", latency_ms);
+    c.risk = risk;
+    return c;
+}
+
+TEST_CASE("RiskGuard: position, notional and open-order limits refuse before the latency pipe") {
+    SUBCASE("max position counts the side's open orders; each side on its own") {
+        Harness h;
+        Script s;
+        RiskLimits risk;
+        risk.max_position = 3 * kLot;
+        s.start = [](Context& ctx) {
+            ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, 2 * kLot);
+            ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, kLot);   // 3: at the limit
+            ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, kLot);   // 4: refused
+            ctx.send(Side::SELL, OrderType::LIMIT, 11000 * kTick, 3 * kLot);
+        };
+        h.gw->add_session(s, with_risk(risk));
+        h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+        h.gw->start();
+        h.run_until(10);
+        const std::vector<std::string> expected{"0 rejected(risk_position)", "2 ack", "2 ack", "2 ack"};
+        CHECK(s.log == expected);
+        CHECK(h.gw->stats(0).risk_rejects == 1);
+        CHECK(h.gw->stats(0).orders_sent == 4);
+        CHECK(h.gw->context(0).open_orders().size() == 3);
+    }
+    SUBCASE("max order notional, a MARKET order at the observed best opposite price") {
+        Harness h;
+        Script s;
+        RiskLimits risk;
+        risk.max_order_notional = 10000000;  // 0.1 quote
+        s.book = [](Context& ctx, const ObservedBook&) {
+            ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, kLot);      // 0.09
+            ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, 2 * kLot);  // 0.18: refused
+            ctx.send(Side::SELL, OrderType::MARKET, 0, kLot);               // at the bid 100.00: 0.1, passes
+            ctx.send(Side::BUY, OrderType::MARKET, 0, kLot);                // at the ask 100.10: refused
+        };
+        h.gw->add_session(s, with_risk(risk));
+        h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+        h.gw->start();
+        h.run_until(1);
+        CHECK(h.gw->stats(0).risk_rejects == 2);
+        const std::vector<std::string> expected{"1 rejected(risk_notional)", "1 rejected(risk_notional)"};
+        CHECK(std::vector<std::string>(s.log.begin(), s.log.begin() + 2) == expected);
+    }
+    SUBCASE("max open orders; a replace isn't a new order, but is checked against the position") {
+        Harness h;
+        Script s;
+        RiskLimits risk;
+        risk.max_open_orders = 2;
+        risk.max_position = 2 * kLot;
+        std::vector<OrderId> ids;
+        s.start = [&](Context& ctx) {
+            ids.push_back(ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, kLot));
+            ids.push_back(ctx.send(Side::SELL, OrderType::LIMIT, 11000 * kTick, kLot));
+            ids.push_back(ctx.send(Side::SELL, OrderType::LIMIT, 11000 * kTick, kLot));  // a third: refused
+            ctx.set_timer(10 * kMs);
+        };
+        s.timer = [&](Context& ctx, uint64_t) {
+            ctx.replace(ids[0], 9100 * kTick, 2 * kLot);  // passes: the old order doesn't count
+            ctx.replace(ids[1], 11000 * kTick, 3 * kLot);  // refused: a short of 3 lots
+        };
+        h.gw->add_session(s, with_risk(risk));
+        h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+        h.gw->start();
+        h.run_until(20);
+        const std::vector<std::string> expected{"0 rejected(risk_open_orders)", "2 ack", "2 ack", "10 timer 1",
+                                                "10 reject replace(risk_position)", "12 cancelled(replaced)",
+                                                "12 ack"};
+        CHECK(s.log == expected);
+        CHECK(h.gw->context(0).open_orders().at(ids[1]).status == OrderStatus::NEW);
+        CHECK(h.gw->context(0).open_orders().at(ids[0]).quantity == 2 * kLot);
+    }
+}
+
+TEST_CASE("RiskGuard: the drawdown kill switch cancels everything, then only reducing orders pass") {
+    // t=0: bid 100.00 x 5, ask 100.10 x 2. The strategy buys 2 lots at 100.10 and offers 1 lot at 101.00.
+    // t=50: the market drops to 90.00 / 90.10: marked at 90.05 it is down about 0.02 > 0.01: killed.
+    Harness h;
+    Script s;
+    RiskLimits risk;
+    risk.max_drawdown = 1000000;  // 0.01 quote
+    bool tried = false;
+    s.start = [](Context& ctx) {
+        ctx.send(Side::BUY, OrderType::LIMIT, 10010 * kTick, 2 * kLot);
+        ctx.send(Side::SELL, OrderType::LIMIT, 10100 * kTick, kLot);
+    };
+    s.book = [&](Context& ctx, const ObservedBook& b) {
+        if (tried || b.best_bid()->price != 9000 * kTick) return;
+        tried = true;
+        ctx.send(Side::BUY, OrderType::LIMIT, 9000 * kTick, kLot);  // adds: refused
+        ctx.send(Side::SELL, OrderType::LIMIT, 9010 * kTick, kLot);  // with the 1 lot still offered: flat, passes
+        ctx.send(Side::SELL, OrderType::LIMIT, 9010 * kTick, kLot);  // would go short: refused
+    };
+    h.gw->add_session(s, with_risk(risk));
+    h.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+    h.depth(50, {{BID, 10000, 0}, {ASK, 10010, 0}, {BID, 9000, 5}, {ASK, 9010, 5}});
+    h.gw->start();
+    h.run_until(100);
+    const std::vector<std::string> expected{"2 ack", "2 fill 0.002@100.1 t=1", "2 ack",
+                                            "51 rejected(risk_killed)", "51 rejected(risk_killed)",
+                                            "53 cancelled(user)", "53 ack"};
+    CHECK(s.log == expected);  // the offer at 101.00 is cancelled by the kill switch; the reducing sell rests
+    CHECK(h.gw->stats(0).risk_killed_at == 51 * kMs);
+    CHECK(h.gw->stats(0).risk_rejects == 2);
+    CHECK(h.gw->stats(0).cancels_sent == 1);
+}
+
 TEST_CASE("max open orders; a cancel frees a slot") {
     Harness h;
     Script s;

@@ -5,6 +5,8 @@
 //   strategy side   Context calls (send / cancel / amend / replace / timers) become ORDER_ARRIVE events at
 //                   entry latency; book batches, reports and request rejections are delivered after feed /
 //                   ack latency, and only then change what the strategy knows (its book, open orders, account)
+//   risk            each strategy's RiskGuard (P6.4) checks its new orders, amends and replaces before they
+//                   leave, against what the strategy knows; a refusal comes back at once, without latency
 //   exchange side   arriving requests go through Binance's limits (request weight per minute; orders per 10 s
 //                   and per day, open orders), then into the engine. Every engine report for a strategy's order, whatever caused it (its
 //                   own request, a data trade, another strategy), updates the exchange-side account and is
@@ -15,6 +17,7 @@
 #include "event_queue.hpp"
 #include "latency_models.hpp"
 #include "observed_book.hpp"
+#include "risk_guard.hpp"
 #include "replayer.hpp"
 #include "strategy.hpp"
 
@@ -81,6 +84,7 @@ struct SessionConfig {
     std::shared_ptr<const LatencyModel> ack;
     FeeSchedule fees{};
     GatewayLimits limits{};
+    RiskLimits risk{};  // the strategy's own pre-trade limits (P6.4); all off by default
 };
 
 // Sees every message between the strategies and the exchange, e.g. the result recorder (P3.13). Called
@@ -104,6 +108,9 @@ struct SessionStats {
     uint64_t rate_limited = 0;    // rejected by orders per 10 s / per day
     uint64_t weight_limited = 0;  // rejected by request weight per minute (any request type)
     uint64_t open_limited = 0;    // rejected by max open orders
+    uint64_t risk_rejects = 0;    // refused by the strategy's RiskGuard (orders, amends, replaces)
+    uint64_t risk_killed_at = 0;  // when the drawdown kill switch tripped (0: never)
+    int64_t max_drawdown = 0;     // largest fall of the PnL from its high seen by the RiskGuard (with max_drawdown set)
     uint64_t request_rejects = 0; // cancels / amends / replaces refused
     uint64_t reports = 0;         // execution reports delivered
     uint64_t md_batches = 0;      // book and trade batches delivered
