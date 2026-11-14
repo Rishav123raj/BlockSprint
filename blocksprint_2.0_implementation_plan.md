@@ -87,6 +87,7 @@
 | 2026-11-14 | v1 deprecated | `--v1` warns that it is deprecated; P7.8's gate changes from two weeks of stable v2 to a soak test (24-48 h, pass/fail), user's decision. Phase 7 tagged `v2.0.0-p7` with P7.8 pending on the soak |
 | 2026-11-14 | Soak test built; tag `v2.0.0-p7` | `research/live/soak.py`: fresh server + bridge for 5 symbols for `--hours`; every 5 s process liveness and resync timing, every minute the server's top 10 a side against Binance REST depth (better of two server reads), crossed book, memory incl. child processes; verdict: processes up, resyncs ≤ 30 s, median level match ≥ 0.9 and no 5-check run below 0.5 same-price, never crossed, ≤ 20 MB/h growth in the second half, ≥ 24 h with a recovered reconnect. 4-min trial: median match 1.0 on all 5. CI gains `no-signing` (section 7.12's grep, never added before); `testnet.py` is its one exception, host fixed to the testnet and checked. `v2.0.0-p7` tagged on 6b441f6. 245 Python |
 | 2026-11-14 | P8.4 built | `research/data/sample.py`: `make` slices a packed dataset per symbol (`bs_sim slice`) into a reproducible archive (no creation time in the manifest, fixed tar/gzip metadata: same input, same bytes); `get` downloads it from the GitHub release `sample-data-v1` (user's choice over committing it), checks the pinned SHA-256, refuses entries outside the dataset, verifies each `.bse` against the manifest. Sample: BTCUSDT + ETHUSDT 2026-11-10 02:00-03:00 UTC, 62 MB unpacked, 9.2 MB archive. `configs/sim/sample_quoter.json` runs PassiveQuoter on it in ~3 s (1,332 fills). Soak run started 05:52 UTC. Tests: `test_sample_data.py`. 249 Python |
+| 2026-11-14 | P8.1 done | `README.md` rewritten for 2.0: positioning (queue- and latency-aware, exact, deterministic, checked against paper), a quickstart on the sample (build, `uv sync`, `sample get`, `bs_sim run configs/sim/sample_quoter.json` ~3 s, `research.run research/experiments/configs/sample_mm.yaml`: 3 Avellaneda-Stoikov runs in 11 s with tearsheets and a report), a Python strategy example (run on the sample: 35 maker fills), a Mermaid architecture diagram and layer table, recording, live and paper mode, results with links to their evidence, tests, layout. Its commands were run here except the clone and the download (`sample get` tested from the local archive until the release asset is up); a clean-machine check is on the release checklist. 249 Python |
 
 ---
 
@@ -725,5 +726,5 @@ Tick these off as phases complete.
 - [x] P7.5 Parity report  - [x] P7.6 Calibration  - [x] P7.7 Testnet (opt)  - [ ] P7.8 Remove v1 connector
 
 **Phase 8: Release 2.0**
-- [ ] P8.1 README  - [ ] P8.2 Explanations  - [ ] P8.3 Changelog  - [ ] P8.4 Sample data
+- [x] P8.1 README  - [ ] P8.2 Explanations  - [ ] P8.3 Changelog  - [x] P8.4 Sample data
 - [ ] P8.5 Final numbers  - [ ] P8.6 `v2.0.0` tag

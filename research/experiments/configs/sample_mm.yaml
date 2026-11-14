@@ -1,0 +1,20 @@
+# The quickstart experiment (README): Avellaneda-Stoikov on the sample hour, three risk aversions, a tearsheet per
+# run and a comparison report. Get the sample first (uv run python -m research.data.sample get), then:
+#   uv run python -m research.run research/experiments/configs/sample_mm.yaml
+name: sample_mm
+description: Avellaneda-Stoikov on the sample hour (BTCUSDT 2026-11-10 02:00-03:00 UTC), Tokyo latency, three gammas
+dataset: data/sample/binance_spot_btc_eth_sample
+symbol: BTCUSDT
+window: {warmup_s: 60}
+seeds: [1]
+latency_preset: binance_spot_tokyo_vps
+queue_model: {model: prob_power, n: 2}
+fees: {maker_rate: "0.001", taker_rate: "0.001"}
+sample_ms: 1000
+strategy:
+  python: research.strategies.avellaneda_stoikov:AvellanedaStoikov
+  params: {size: "0.001", max_position: "0.01", refresh_ms: 500, horizon_s: 30, k: 100}
+sweep:
+  mode: grid
+  params:
+    strategy.params.gamma: [0.0005, 0.005, 0.05]
