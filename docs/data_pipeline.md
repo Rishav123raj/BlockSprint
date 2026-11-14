@@ -281,6 +281,30 @@ build\Release\bs_sim.exe config configs/sim/example_btc.json --set seed=7       
 build\Release\bs_sim.exe run configs/sim/example_btc.json --set strategy.name=null --set strategy.params={} --out results/null_btc
 ```
 
+## 6c. The sample dataset (P8.4)
+
+One packed hour, BTCUSDT and ETHUSDT on 2026-11-10 02:00-03:00 UTC (QC `pass`), for the quickstart and examples
+without recording first: 62 MB unpacked (879,751 and 670,147 records), a 9.2 MB archive on the GitHub release
+`sample-data-v1`.
+
+```powershell
+uv run python -m research.data.sample get            # into data/sample/binance_spot_btc_eth_sample
+.\build\Release\bs_sim.exe run configs/sim/sample_quoter.json   # PassiveQuoter on BTCUSDT, about 3 s
+```
+
+`get` checks the archive against the SHA-256 pinned in `research/data/sample.py` before unpacking, refuses
+entries outside the dataset directory, and checks every `.bse` against the manifest; a verified copy already
+there is kept. `--archive FILE` uses a local copy instead of downloading. It is a normal packed dataset directory:
+any run config takes it as `dataset`.
+
+`make` rebuilds the archive from the packed day (`bs_sim slice` per symbol, a manifest without a creation time,
+a tar.gz with fixed metadata), so the same input gives the same archive byte for byte:
+
+```powershell
+uv run python -m research.data.sample make --dataset data/packed/binance_spot_btc_eth_1110 `
+    --from 2026-11-10T02:00:00Z --to 2026-11-10T03:00:00Z --out dist/sample
+```
+
 ## 7. Tests
 
 ```powershell

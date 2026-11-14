@@ -1,0 +1,12 @@
+{
+  "dataset": "data/sample/binance_spot_btc_eth_sample",
+  "symbol": "BTCUSDT",
+  "latency_preset": "binance_spot_tokyo_vps",
+  "queue_model": "prob_power:2",
+  "seed": 1,
+  "strategy": {
+    "name": "passive_quoter",
+    "params": {"size": "0.001", "refresh_ms": 500, "max_position": "0.005"}
+  },
+  "output": {"dir": "results/sample_quoter", "sample_ms": 1000}
+}
