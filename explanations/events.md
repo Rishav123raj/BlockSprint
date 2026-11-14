@@ -39,8 +39,13 @@ Execution reports describe the complete lifecycle of every order, in the order t
 | | `post_only_would_take` | A post-only (`limit_maker`) order, or an amend of one, would trade on arrival instead of resting |
 | | `rate_limit` | Simulator gateway (P3.10): too many orders per 10 s or per day; the order never reached the engine |
 | | `max_open_orders` | Simulator gateway: the participant already has the maximum number of open orders on the symbol |
+| | `risk_position` | The strategy's `RiskGuard` (P6.4): the position could exceed `max_position` if this order and the side's open orders filled |
+| | `risk_notional` | `RiskGuard`: the order's notional is above `max_order_notional` |
+| | `risk_open_orders` | `RiskGuard`: the strategy already has `max_open_orders` open or pending orders |
+| | `risk_killed` | `RiskGuard`: the drawdown kill switch is on and the order doesn't reduce the position |
+| | `gap_halted` | The simulator's gap policy (P6.5): trading is halted until the feed resyncs |
 
-The last four apply only to symbols with trading rules (`set_symbol_spec`, `POST /api/symbols`), and not to market-data liquidity (mirrored or replayed exchange levels). An invalid `modify` is also `rejected`; the order stays as it was.
+The `risk_*` and `gap_halted` rejections are made by the simulator before the order enters the latency pipe, so they never reach the gateway or the engine ([sim_strategies.md](sim_strategies.md), [sim_simulator.md](sim_simulator.md)). `price_tick` through `min_notional` apply only to symbols with trading rules (`set_symbol_spec`, `POST /api/symbols`), and not to market-data liquidity (mirrored or replayed exchange levels). An invalid `modify` is also `rejected`; the order stays as it was.
 
 ## Fees (P1.13)
 

@@ -18,21 +18,23 @@ This component implements the networking layer, hosting the HTTP REST endpoints 
    - `GET /api/symbols?symbol=BTC-USDT`: the symbol's trading rules; `404` if none are set.
    - `POST /api/fees` (**localhost only**, P1.13): sets a fee schedule, `{"owner": "alice", "maker_rate": "0.0002", "taker_rate": "0.0004"}`. Rates are decimal fractions (`"0.001"` = 0.10%); a negative rate is a rebate. Without `owner` it sets the default for everyone. The server starts with Binance's regular tier, 0.10% / 0.10%.
    - `GET /api/fees?owner=alice`: the schedule that applies to that owner (`"source"`: `owner` or `default`).
-   - `POST /api/reset`: clears all books (trading rules and fee schedules are kept).
+   - `GET /api/market-feed` (P7.1): per-symbol statistics of the market feed (see `/ws/market-feed` below).
+   - `POST /api/reset`: clears all books (trading rules and fee schedules are kept). The market feed forgets every symbol too, so each needs a snapshot again.
 2. **Order rules (P1.12):** every order needs a positive quantity, and every type but `market` needs a positive price. A missing price used to become 0, which made a sell sweep every bid (1.0 defect D6). Symbols with trading rules also check tick size, lot size, the quantity range and the minimum notional (limit price × quantity). Orders from the reserved owner `MARKET` (mirrored Binance levels, accepted only from localhost) are exempt from the symbol rules: real books contain levels below the minimum notional.
 3. **Handles WebSocket Clients**:
    - Manages WebSocket endpoints based on the connection resource path:
      - `/ws/market-data`: BBO updates on every change, and depth updates coalesced per symbol to at most one every 100 ms (P1.11).
      - `/ws/trades`: trade events.
      - `/ws/orders`: submit (`"action": "submit"`), replace (`"replace"`), amend (`"amend"`, same fields as `PATCH`) or cancel (`"cancel"`) orders. Responses carry `reports`; errors echo the `order_id`.
-     - `/ws/executions`: every execution report (P1.10).
+     - `/ws/executions`: every execution report (P1.10), except those of the reserved owners `MARKET` and `MARKET_TAPE`: the mirror's own orders are the market, not anyone's executions.
+     - `/ws/market-feed` (P7.1, **localhost only**): the v2 Binance connector streams normalized L2 events here (`snapshot`, `depth`, `trade`, `gap`). The server's `sim::LiveFeed` turns them into synthetic FIFO orders in the engine through the simulator's own Synthesizer, so paper trading and backtests share one L2 → L3 path ([sim_live.md](sim_live.md)). The server replies only on an error. When a symbol's feed loses updates, every `/ws/market-data` subscriber gets `{"event": "gap", "symbol": ...}`: the book is unknown until the next snapshot. A client's taker fills are passed to the feed for the impact model (`--feed-impact-ms`, [main.md](main.md)).
 4. **CORS Options**: Implements `OPTIONS` pre-flight headers (methods `POST, PUT, PATCH, GET, DELETE, OPTIONS`), enabling cross-origin browser testing.
-5. **Subscriber Management**: Uses `std::set` to track active connection handles (`websocketpp::connection_hdl`). Separate sets are kept for `/ws/market-data`, `/ws/trades`, `/ws/orders` and `/ws/executions`, guarded by one `std::mutex`.
+5. **Subscriber Management**: Uses `std::set` to track active connection handles (`websocketpp::connection_hdl`). Separate sets are kept for `/ws/market-data`, `/ws/trades`, `/ws/orders`, `/ws/executions` and `/ws/market-feed`, guarded by one `std::mutex`.
 6. **Broadcasting** (P1.11):
    - The engine's callbacks pass plain structs (`Bbo`, `Depth`, `Trade`, `ExecReport`). JSON is built only if the matching set has subscribers.
    - Depth is coalesced: the latest `Depth` per symbol is kept in `pending_depth_` and an `asio::steady_timer` sends it at most every `depth_interval_ms` (100 ms by default, the constructor's second argument).
    - Events go out with `server_.send(hdl, payload)`.
-7. **Localhost-only operations:** `POST /api/symbols` and `POST /api/fees` are accepted only from loopback addresses (IPv4-mapped IPv6 included); others get `403`. An order with the reserved owner `MARKET` from anywhere else is refused with `400`.
+7. **Localhost-only operations:** `POST /api/symbols` and `POST /api/fees` are accepted only from loopback addresses (IPv4-mapped IPv6 included); others get `403`. An order with the reserved owner `MARKET` from anywhere else is refused with `400`; `MARKET_TAPE` (the market feed's tape orders) is refused from everyone. A `/ws/market-feed` connection from anywhere else is closed with a policy violation.
 
 ---
 
