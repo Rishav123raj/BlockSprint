@@ -469,10 +469,11 @@ json latency_preset(const std::string& name) {
         return json{{"feed", constant(100)}, {"entry", lognormal(3000, 0.3, 1000)}, {"ack", lognormal(3000, 0.3, 1000)}};
     }
     // Strategy and recorder on the development PC. ts_local already includes the PC's network delay, so the
-    // feed adds only processing time; orders cross the same distance one way each.
+    // feed adds only processing time; orders cross the same distance one way each: half the REST round trip
+    // to api.binance.com measured from that PC (P7.6, docs/calibration.md: median 175 ms, p90 189 ms).
     if (name == "binance_spot_home_pc") {
-        return json{{"feed", constant(100)}, {"entry", lognormal(100000, 0.3, 40000)},
-                    {"ack", lognormal(100000, 0.3, 40000)}};
+        return json{{"feed", constant(100)}, {"entry", lognormal(87000, 0.1, 80000)},
+                    {"ack", lognormal(87000, 0.1, 80000)}};
     }
     std::string names;
     for (const auto& n : latency_preset_names()) names += (names.empty() ? "" : ", ") + n;

@@ -165,7 +165,7 @@ from about 19:07 UTC on 2026-11-13; three replay seeds each. Simulator values ar
   2.7). A flat 1-tick bound would fail all three: on BTCUSDT a tick is 0.01 USDT, about 0.0014 bps at 69,000, the
   differences are 0.004 to 0.011 bps and the seeds themselves are 2.7 to 9.5 ticks apart, so 1 tick is below the
   measurement's noise at 300-460 fills. The simulator is consistently a little worse (about 5 ticks, 0.007 bps):
-  the direction for calibration (P7.6). Acceptance is not met yet.
+  the direction for calibration (P7.6). Acceptance is not met yet; calibration's results are in [calibration.md](calibration.md).
 - **Everything else agrees closely:** time to fill (median 1.1-1.7 s on both sides), maker share (100%), the edge
   at the fill (paper 1.2-1.9 ticks except −2.0 in session 3, sim 0.4-0.5), the 5 s and 30 s markouts, the PnL
   split (inventory −0.7 to −1.8, fees 9-12 USDT on both sides).

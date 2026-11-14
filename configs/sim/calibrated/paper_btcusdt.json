@@ -1,0 +1,8 @@
+{
+  "queue_model": "prob_power:1.5",
+  "latency": {
+    "feed": {"model": "normal", "mean_us": 46891, "sd_us": 31273, "min_us": 0},
+    "entry": {"model": "constant", "us": 1501},
+    "ack": {"model": "constant", "us": 1501}
+  }
+}

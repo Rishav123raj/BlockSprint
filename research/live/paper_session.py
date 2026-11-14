@@ -177,7 +177,10 @@ def build_dataset(session: Path) -> Path:
     return packed
 
 
-def replay_session(session: Path, seeds: list[int], latency: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+def replay_session(session: Path, seeds: list[int], latency: dict[str, Any] | None = None,
+                   queue_model: str | None = None, out_dir: Path | None = None) -> list[dict[str, Any]]:
+    """queue_model and out_dir (default: the session's, and ``<session>/sim``) let calibration replay a session
+    with other settings."""
     from research.experiments.schema import make_python_strategy
     from research.sim.results import Results
 
@@ -185,24 +188,26 @@ def replay_session(session: Path, seeds: list[int], latency: dict[str, Any] | No
     meta = json.loads((session / "paper" / "session_meta.json").read_text(encoding="utf-8"))
     dataset = build_dataset(session)
     latency = latency or default_latency(meta)
+    queue_model = queue_model or protocol["queue_model"]
+    out_dir = Path(out_dir) if out_dir else session / "sim"
     out = []
     for seed in seeds:
         cfg = {"dataset": str(dataset), "symbol": protocol["symbol"],
                "window": {"from": meta["trading_ns"], "to": meta["end_ns"]},
-               "latency": latency, "queue_model": protocol["queue_model"], "seed": seed, "gap_policy": "continue",
+               "latency": latency, "queue_model": queue_model, "seed": seed, "gap_policy": "continue",
                "strategy": {"name": "null", "owner": protocol["owner"]},
-               "output": {"dir": str(session / "sim" / f"seed_{seed}"), "sample_ms": 1000}}
+               "output": {"dir": str(out_dir / f"seed_{seed}"), "sample_ms": 1000}}
         strategy = make_python_strategy(protocol["strategy"])
         res = Results.run(cfg, strategy, protocol["callback_mode"])
-        target = session / "sim" / f"seed_{seed}"
+        target = out_dir / f"seed_{seed}"
         for table, frame in res.to_polars(fixed="float").items():
             frame.write_parquet(target / f"{table}.parquet")
         (target / "run_meta.json").write_text(json.dumps(res.meta, indent=2, default=str), encoding="utf-8")
         acct = res.meta["sessions"][0]["exchange_account"]
         out.append({"seed": seed, "fills": acct["fills"], "base_volume": acct["base_volume"], "pnl": acct["pnl"]})
         log.info("sim seed %d: %s", seed, out[-1])
-    (session / "sim" / "replay.json").write_text(json.dumps({"latency": latency, "runs": out}, indent=2),
-                                                  encoding="utf-8")
+    (out_dir / "replay.json").write_text(json.dumps({"latency": latency, "queue_model": queue_model, "runs": out},
+                                                    indent=2), encoding="utf-8")
     return out
 
 

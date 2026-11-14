@@ -25,7 +25,7 @@ TWAP_CONFIG = {
                  "params": {"side": "sell", "quantity": "0.05", "slices": 12, "duration_ms": 50000}},
     "output": {"sample_ms": 500},
 }
-TWAP_HASH = "4a71b6e682c666e2223c7e2da9c4a8949dacee2fe2a21587ef7dce8e641f0614"
+TWAP_HASH = "3477f3a5660d657e9aa42a5c178fbf4895cc1b09732e090626f52d40d53337f9"
 
 
 def config(tmp_path, **extra):

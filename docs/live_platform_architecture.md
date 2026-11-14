@@ -612,15 +612,15 @@ private:
 2. Latency is sampled from the same `LatencyModel` objects the simulator uses (P3.8), with a seeded RNG, so a journal replay samples the same values.
 3. Venue mode with zero latency still goes through the seam with `due = now`, so there is a single code path.
 
-Suggested presets, calibrated in P7.6:
+Presets (P7.6, [calibration.md](calibration.md)):
 
 | Preset | Entry | Ack | Notes |
 |---|---|---|---|
 | `binance_spot_tokyo_vps` | about 2–5 ms* | about 2–5 ms* | AWS ap-northeast-1 |
-| `binance_spot_home_pc` | about 60–150 ms* | about 60–150 ms* | your development PC; measure it |
+| `binance_spot_home_pc` | median 87 ms | median 87 ms | the development PC: half the measured REST round trip to Binance |
 | `zero` | 0 | 0 | venue mode, unit tests |
 
-\* Placeholders until P7.6 measures them.
+\* An estimate: measure it from a VPS in Tokyo.
 
 ### 7.10 Strategy host
 

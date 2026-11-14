@@ -76,7 +76,7 @@ std::vector<Scenario> scenarios() {
           {"strategy", {{"name", "twap_taker"},
                         {"params", {{"side", "sell"}, {"quantity", "0.05"}, {"slices", 12}, {"duration_ms", 50000}}}}},
           {"output", {{"sample_ms", 500}}}},
-         "4a71b6e682c666e2223c7e2da9c4a8949dacee2fe2a21587ef7dce8e641f0614", 12},
+         "3477f3a5660d657e9aa42a5c178fbf4895cc1b09732e090626f52d40d53337f9", 12},
         {"quoter, Tokyo latency, pro_rata, a window inside the file",
          {{"latency_preset", "binance_spot_tokyo_vps"},
           {"queue_model", {{"model", "pro_rata"}}},

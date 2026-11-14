@@ -228,7 +228,7 @@ With the server and the connector running, a strategy from `research/strategies/
 ```powershell
 uv run python -m research.live.runner --strategy research.strategies.passive_quoter:PassiveQuoter --params '{"size": "0.001"}' --symbols BTC-USDT --duration 600 --out results/paper/run1
 ```
-It writes `session.jsonl` and `session_meta.json` for the paper-vs-simulator comparison ([docs/live_platform_architecture.md](docs/live_platform_architecture.md) §7.8). `research.live.paper_session run` records the market while paper trading, and `replay` reruns that window in the simulator ([docs/parity_protocol.md](docs/parity_protocol.md)).
+It writes `session.jsonl` and `session_meta.json` for the paper-vs-simulator comparison ([docs/live_platform_architecture.md](docs/live_platform_architecture.md) §7.8). `research.live.paper_session run` records the market while paper trading, and `replay` reruns that window in the simulator ([docs/parity_protocol.md](docs/parity_protocol.md)); `research.calibration.calibrate` fits the queue model and latency to such sessions ([docs/calibration.md](docs/calibration.md)).
 
 #### 7. Run WebSocket Throughput Benchmark
 ```powershell

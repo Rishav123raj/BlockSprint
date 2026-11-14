@@ -698,9 +698,9 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
   | :--- | :--- | :--- |
   | `zero` | 0 | 0 |
   | `binance_spot_tokyo_vps` | 100 µs | lognormal, median 3 ms, σ 0.3, min 1 ms |
-  | `binance_spot_home_pc` | 100 µs | lognormal, median 100 ms, σ 0.3, min 40 ms |
+  | `binance_spot_home_pc` | 100 µs | lognormal, median 87 ms, σ 0.1, min 80 ms |
 
-  The two Binance presets are placeholders until calibration (P7.6). The home PC feed is small because `ts_local` already contains this PC's network delay.
+  The home PC's order legs are measured (P7.6, [calibration.md](calibration.md)): half the REST round trip to `api.binance.com` from the development PC. The Tokyo VPS preset is still an estimate: it can only be measured from a VPS there. The home PC feed is small because `ts_local` already contains this PC's network delay.
 - **Dataset:** a packed dataset directory (its `manifest.json` gives the symbol's file and SHA-256; `symbol` is required when there are several) or a `.bse` file. The header is validated, and its symbol must match `symbol`. Several symbols (P6.7, §11.6): `symbol` as a list with a dataset directory, or `dataset` as a list of `.bse` files (with `symbol` a list of as many, or left out); the resolved `symbol` is then the list.
 - **Times:** ns, `"YYYY-MM-DD"` (midnight UTC) or `"YYYY-MM-DDTHH:MM:SS[.fffffffff]Z"`. The resolved config holds them at full ns precision, and it resolves to itself (tested), so a run's `run_meta.json` can be run again as is.
 - **Fee rates** are exact decimal strings (or numbers); negative rates are rebates.

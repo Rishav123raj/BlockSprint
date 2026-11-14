@@ -190,12 +190,14 @@ def measure(side: Side, mids: Mids, tick: float, end_ns: int,
     return out
 
 
-def session_report(session: str | Path) -> dict[str, Any]:
-    """Paper and every replay seed of a session, measured alike, and the acceptance checks."""
+def session_report(session: str | Path, sim_dir: str | Path | None = None) -> dict[str, Any]:
+    """Paper and every replay seed of a session, measured alike, and the acceptance checks. sim_dir: the replay
+    to compare (default ``<session>/sim``)."""
     session = Path(session)
+    sim_dir = Path(sim_dir) if sim_dir else session / "sim"
     meta = json.loads((session / "paper" / "session_meta.json").read_text(encoding="utf-8"))
     bse = next((session / "packed" / "session").glob("*.bse"))
-    runs = sorted(p for p in (session / "sim").glob("seed_*") if (p / "exec_reports.parquet").exists())
+    runs = sorted(p for p in sim_dir.glob("seed_*") if (p / "exec_reports.parquet").exists())
     if not runs:
         raise FileNotFoundError(f"{session}: no replay (run paper_session replay first)")
     run_meta = json.loads((runs[0] / "run_meta.json").read_text(encoding="utf-8"))
