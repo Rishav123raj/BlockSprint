@@ -2,8 +2,8 @@
 
 v2 (the default, P7.2): research/live/feed_bridge.py streams every depth update and trade to /ws/market-feed,
 where the simulator's Synthesizer builds the book (queue positions, trades reaching resting orders).
-v1 (--v1, kept until v2 has run stably for two weeks, P7.8): mirrors the top-10 partial book as one MARKET order
-per level, re-submitting a level whenever it changes.
+v1 (--v1, deprecated): mirrors the top-10 partial book as one MARKET order per level, re-submitting a level
+whenever it changes. It is removed once v2 passes the soak test (scripts/soak_v2.py, P7.8).
 
     uv run scripts/binance_connector.py              # v2, the same 5 symbols as v1
     uv run scripts/binance_connector.py --v1
@@ -264,11 +264,14 @@ def run_v2(symbols):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Binance market data into the BlockSprint engine")
-    parser.add_argument("--v1", action="store_true", help="the 1.0 connector (one MARKET order per top-10 level)")
+    parser.add_argument("--v1", action="store_true",
+                        help="deprecated: the 1.0 connector (one MARKET order per top-10 level)")
     args = parser.parse_args()
     symbols = get_active_symbols(limit=5)
     try:
         if args.v1:
+            print("WARNING: --v1 is deprecated and will be removed once v2 passes its soak test (P7.8); "
+                  "the default v2 connector replaces it.", file=sys.stderr)
             reset_engine()
             asyncio.run(sync_websocket_deltas(symbols))
         else:
