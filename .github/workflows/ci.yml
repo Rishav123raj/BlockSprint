@@ -6,6 +6,19 @@ on:
   pull_request:
 
 jobs:
+  no-signing:
+    # Live platform section 7.12: no code signs a Binance request. The one exception is the testnet latency tool
+    # (P7.7), which signs only for testnet.binance.vision and refuses any other host.
+    name: No Binance request signing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: grep
+        run: |
+          hits=$(grep -rlE 'X-MBX-APIKEY|signature=|/api/v3/order' src scripts research --include='*.py' --include='*.cpp' --include='*.hpp' | grep -v '^research/live/testnet.py$' || true)
+          if [ -n "$hits" ]; then echo "Binance request signing outside research/live/testnet.py:"; echo "$hits"; exit 1; fi
+          grep -q '^BASE = "https://testnet.binance.vision"$' research/live/testnet.py
+
   build-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}

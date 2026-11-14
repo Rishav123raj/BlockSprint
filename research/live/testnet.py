@@ -63,9 +63,11 @@ def _round(x: Decimal, step: Decimal, mode: str) -> Decimal:
 
 
 class TestnetClient:
+    """Signs requests for the testnet only: the host is fixed (CI checks it), never configurable."""
     __test__ = False  # not a pytest class, despite the name
-    def __init__(self, key: str | None = None, secret: str | None = None, session: Any = None, base: str = BASE):
-        self.key, self.secret, self.base = key, secret, base
+
+    def __init__(self, key: str | None = None, secret: str | None = None, session: Any = None):
+        self.key, self.secret, self.base = key, secret, BASE
         self.http = session or requests.Session()
         self.offset_ms = 0.0  # server clock minus local clock
 
@@ -75,6 +77,8 @@ class TestnetClient:
         return r.json()
 
     def _signed(self, method: str, path: str, params: dict[str, Any]) -> Any:
+        if self.base != BASE:
+            raise RuntimeError(f"refusing to sign a request for {self.base}: testnet only")
         params = {**params, "recvWindow": 5000, "timestamp": int(time.time() * 1000 + self.offset_ms)}
         r = self.http.request(method, f"{self.base}{path}?{sign(params, self.secret)}",
                               headers={"X-MBX-APIKEY": self.key}, timeout=10)

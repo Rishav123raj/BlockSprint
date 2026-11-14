@@ -82,3 +82,10 @@ def test_suggested_leg_is_half_the_round_trip():
     leg = suggested_leg({"p10": 170.0, "p50": 175.0, "p90": 189.0})
     assert leg["median_us"] == 87500 and leg["min_us"] == 85000
     assert leg["sigma"] == pytest.approx(0.06, abs=0.01)
+
+
+def test_signing_refuses_any_host_but_the_testnet():
+    c = TestnetClient("k", "s", FakeExchange())
+    c.base = "https://api.binance.com"
+    with pytest.raises(RuntimeError, match="testnet only"):
+        c._signed("POST", "/api/v3/order", {})
