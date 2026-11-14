@@ -75,3 +75,29 @@ cfg = {**json.load(open("configs/sim/calibrated/paper_btcusdt.json")), "dataset"
 The feed delay of both stays at 100 µs, since the recorder's `ts_local` already contains the network delay.
 Changing the home PC preset re-pinned one golden scenario (the TWAP seller, `determinism_test.cpp` and
 `test_bindings.py`); MSVC and GCC give the same new hash.
+
+## Testnet (P7.7, optional)
+
+```powershell
+uv run python -m research.live.testnet --symbol BTCUSDT --n 60 --orders 30 --out data/testnet/<date>.json
+```
+
+`research/live/testnet.py` measures latency against the Binance Spot Testnet (`testnet.binance.vision`): the REST
+round trip and the clock offset, and, with testnet keys (`BINANCE_TESTNET_API_KEY`, `BINANCE_TESTNET_API_SECRET`
+from https://testnet.binance.vision; it never reads the mainnet variables), the place and cancel round trips of
+post-only minimum-size buys at 20% below the bid, each cancelled at once, and the entry leg one way from the
+server's `transactTime`. It prints a suggested one-way leg (lognormal, half the round trip's median). The testnet's
+liquidity isn't representative, so it is for latency only.
+
+First run (2026-11-14, public part only: no testnet keys yet), from the development PC:
+
+| | p10 | median | p90 | max |
+| :--- | ---: | ---: | ---: | ---: |
+| testnet REST round trip | 171 ms | 198 ms | 500 ms | 559 ms |
+| mainnet REST round trip (above) | 170 ms | 175 ms | 189 ms | 477 ms |
+
+- The testnet's median is close to mainnet's (+23 ms), with a much heavier tail, so the home PC preset stays on
+  the mainnet measurement.
+- This PC's clock was 389 ms behind Binance's. Recordings and paper sessions stamp everything with the same local
+  clock, so it doesn't affect them, but signed requests depend on it (`recvWindow` 5 s).
+- With testnet keys, rerun with `--orders 30` to time real order round trips.
