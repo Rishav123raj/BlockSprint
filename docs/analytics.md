@@ -152,6 +152,8 @@ queue.summary(run)                 # one row per strategy
 | Fill rate | 95% | 89% | 82% | 75% | 49% | 24% | 20% | 18% | 15% | 17% |
 | Median time to fill (s) | 0.26 | 0.81 | 1.78 | 2.37 | 4.73 | 6.27 | 5.84 | 7.75 | 8.06 | 8.30 |
 
+**Paper vs simulator (P7.5).** `research/analytics/parity.py` compares a paper session with its replays: fill ratio, time to fill, spread and markouts against the recorded data's mid, and the PnL split; see [parity_protocol.md](parity_protocol.md).
+
 **Multi-symbol runs (P6.7).** Every function here measures one symbol against its own data. Narrow a multi-symbol run first: `tca.fill_costs(run.for_symbol("ETHUSDT"), "5s")`; an un-narrowed one raises `ValueError`.
 
 ## Risk (`risk.py`, P5.8)

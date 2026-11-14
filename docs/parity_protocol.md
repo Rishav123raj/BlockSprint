@@ -75,6 +75,36 @@ The replay's default latency (`paper_session.default_latency`) turns them into a
 that mean and the spread implied by p10–p90 (the simulator has no uniform model), and entry and ack delays of half
 the median round trip each. This is the starting point; P7.6 fits it.
 
+## The report (P7.5)
+
+```powershell
+uv run python -m research.analytics.parity data/paper/2026-11-14_quoter_btc_1 data/paper/2026-11-14_quoter_btc_2 data/paper/2026-11-14_quoter_btc_3
+```
+
+`research/analytics/parity.py` measures the paper session and each replay seed **the same way, against the same
+market**: the session's recording. It writes `parity.json` into each session and prints Markdown tables.
+
+| Measure | Definition |
+| :--- | :--- |
+| fill ratio | quantity filled / quantity offered (every new order's and replace's quantity) |
+| fills, volume, maker share | counts and base volume of the fills |
+| time to fill | per fill, from the order's last placement (new order or replace) to the fill: median, p90 |
+| spread (ticks, bps) | per fill, the data's mid just before the fill minus its price, signed by side: the edge a maker fill earned (a taker's is negative) |
+| markout 1 / 5 / 30 s (ticks, bps) | per fill, the mid that long after minus the price, signed by side; quantity-weighted |
+| PnL | marked at the data's mid at the end: spread PnL (each fill's edge), inventory PnL (the position as the mid moved), fees; PnL = spread + inventory − fees |
+
+- **Paper fills are timed at the data trade that made them.** The server stamps a fill when it applies the trade,
+  a few ms after the recorder stamped the same Binance trade (median 6.5 ms in the first session), and a depth
+  update in between can already show the move: measured at the server's stamp, a paper maker fill looked 105 ticks
+  worse than the mid. The report finds the latest data trade at the fill's price from the other side within the
+  second before (99.8% of paper fills match) and measures there, as the simulator's fills already are. It reports
+  the lag (`data_time_lag_ms`) and the share matched.
+- **Acceptance (Phase 7):** the simulator's mean over seeds within ±15% of paper on the fill ratio, and within
+  the simulator's own noise on the mean 1 s markout, in every one of at least three sessions. The noise is the
+  range of the 1 s markout across the replay seeds, at least 1 tick (also the bound with a single seed). The plan
+  first asked for 1 tick flat; on BTCUSDT a tick is about 0.0014 bps, far below what ~400 fills can resolve, so
+  the bound is the spread the simulator itself shows between seeds (decided 2026-11-14).
+
 ## Known differences, by construction
 
 - **Depth is batched.** Binance sends depth every 100 ms but trades as they happen; the server's feed reproduces
@@ -118,3 +148,28 @@ on this short window. Measured: depth delay mean 47 ms, order round trip median 
 - **First reading:** the simulator trades 2-5% more volume in fewer, larger fills (395-402 against 447). The volume
   is already well inside the ±15% target; the fill count, markouts and the rest are P7.5's report. One session is
   not enough to conclude anything: the acceptance needs at least three.
+
+## Three sessions (2026-11-14, P7.5)
+
+`PassiveQuoter` (0.001 a side, 500 ms, at most 0.005), BTCUSDT, `prob_power:2`, 15 minutes each, back to back
+from about 19:07 UTC on 2026-11-13; three replay seeds each. Simulator values are the mean over seeds.
+
+| Session | Fills paper / sim | Fill ratio paper / sim | Rel. diff | Markout 1 s paper / sim (ticks) | Diff | Seed range | Markout 1 s (bps) | PnL paper / sim |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 447 / 398 | 0.462 / 0.462 | +0.2% | −433.6 / −441.2 | −7.6 | 9.3 | −0.628 / −0.639 | −12.32 / −12.88 |
+| 2 | 413 / 456 | 0.424 / 0.441 | +4.0% | −428.0 / −430.6 | −2.6 | 9.5 | −0.620 / −0.624 | −11.52 / −12.40 |
+| 3 | 354 / 312 | 0.410 / 0.385 | −6.1% | −474.7 / −480.9 | −6.2 | 2.7 | −0.688 / −0.697 | −11.85 / −11.15 |
+
+- **Fill ratio: passes** in all three (within ±15%; the largest gap is 6%).
+- **1 s markout within the seed range: passes in sessions 1 and 2, fails in 3** (6.2 ticks against a seed range of
+  2.7). A flat 1-tick bound would fail all three: on BTCUSDT a tick is 0.01 USDT, about 0.0014 bps at 69,000, the
+  differences are 0.004 to 0.011 bps and the seeds themselves are 2.7 to 9.5 ticks apart, so 1 tick is below the
+  measurement's noise at 300-460 fills. The simulator is consistently a little worse (about 5 ticks, 0.007 bps):
+  the direction for calibration (P7.6). Acceptance is not met yet.
+- **Everything else agrees closely:** time to fill (median 1.1-1.7 s on both sides), maker share (100%), the edge
+  at the fill (paper 1.2-1.9 ticks except −2.0 in session 3, sim 0.4-0.5), the 5 s and 30 s markouts, the PnL
+  split (inventory −0.7 to −1.8, fees 9-12 USDT on both sides).
+- **Fill counts** differ more than volume (sim 11% fewer in sessions 1 and 3, 10% more in session 2): partial fills
+  split differently between the server's queues and the replay's.
+- **Timing:** paper fills matched to a data trade 96-100% of the time, stamped 3.6-6.5 ms after it (median);
+  depth delay mean 46-47 ms; order round trip median 2.9-3.1 ms.

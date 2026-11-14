@@ -81,6 +81,7 @@
 | 2026-11-14 | P7.2 done | `research/live/feed_bridge.py`: one Binance connection with `@depth@100ms` + `@trade` per symbol; `BookSync` per symbol buffers until a REST snapshot (limit 1000), then streams snapshot + continuing deltas (absolute quantities) to `/ws/market-feed`; duplicates dropped; gap, 10 s silence or a lost connection send `gap` and resync; trades deduplicated by ID, `m` -> seller aggressor. Sync rules extracted to `research/data/binance_sync.py` and used by the normalizer too (its tests and golden output unchanged). `scripts/binance_connector.py` runs v2 by default, `--v1` the 1.0 mirror (removes D10); `run_all.py` uses v2. `interactive_test.py` scriptable and compares per price level. Live: synced within 3 s, no gaps; interactive_test passed 5 cases (market walking ten levels, market sell, IOC, passive limit, FOK killed). Live `trade_reproduced` ~0.5 (100 ms depth batching: trades meet levels the next update changes), as in the recorded data. Tests: `test_feed_bridge.py` (rules, BookSync, messages through the server), shared server fixture `tests/python/live_server.py`. 218 Python |
 | 2026-11-14 | P7.3 done | `research/live/runner.py`: `LiveContext` implements the research Strategy API over `/ws/orders` (requests, replies), `/ws/executions` (the owner's reports: open orders and per-symbol accounts as the simulator's gateway keeps them), `/ws/market-data` (top 10 without the strategy's own orders, seeded from `GET /api/depth`, `gap`), `/ws/trades` (the feed's tape). Cancel-not-found and refused amends become `on_reject`; a replace of an order not known as open is refused locally, as the sim's gateway does. Timers, warm-up, callback modes, multi-symbol. Journal `session.jsonl` + `session_meta.json` for P7.4; open orders cancelled at the end. CLI `python -m research.live.runner --strategy module:Class --params ...`. Tests: `test_live_runner.py` (conversions, accounts vs the sim's numbers, book, replies and reports; the research PassiveQuoter against the server with a scripted feed: both maker fills, flat; 10/10 runs). Live: the same quoter on BTC-USDT for 2 min, 101 maker fills, no gaps. 224 Python |
 | 2026-11-14 | P7.4 done | `docs/parity_protocol.md` + `research/live/paper_session.py`: `run` starts the recorder into the session directory, then (after a 20 s lead) the server with the session's queue model and the v2 bridge, waits for sync, paper-trades the strategy with the live runner, stops, and records a 60 s tail; `replay` normalizes, QCs and packs the session (`--allow-partial`) and runs the same strategy class and parameters in the sim over exactly the paper window, same queue model, `gap_policy: continue`, latency from the session's measured delays (the runner now records `md_delay_ms` and `order_rtt_ms`), once per seed. First 15-minute session (PassiveQuoter, BTCUSDT, prob_power:2): paper 447 fills / 0.168 BTC, replay 395-402 fills / 0.172-0.176 BTC over 3 seeds; depth delay mean 46 ms, order round trip median 3.1 ms; feed trade_reproduced 0.55. Sessions under `data/paper/` (not in git). 226 Python |
+| 2026-11-14 | P7.5 done | `research/analytics/parity.py`: paper and every replay seed measured alike against the session's recording: fill ratio (filled / offered), fills, volume, maker share, time to fill (from the last placement), spread at the fill and 1/5/30 s markouts (ticks and bps, against the data's mid; the mid just before a fill), PnL split (spread, inventory, fees) at the end mid; paper fills timed at the data trade that made them (the server stamps them 3.6-6.5 ms later; 96-100% matched), acceptance checks per session and across sessions, Markdown and `parity.json`. Three 15-minute PassiveQuoter sessions on BTCUSDT: fill ratio within ±15% in all (+0.2%, +4.0%, -6.1%); 1 s markout off by 2.6-7.6 ticks (0.004-0.011 bps); on BTCUSDT a tick is ~0.0014 bps, below the noise at ~400 fills, so the markout tolerance is now the sim's own seed range (at least 1 tick; user's decision): passes sessions 1-2, fails 3 (6.2 vs 2.7). Acceptance not met yet: P7.6 calibrates. Tests: `test_parity_report.py` (hand-made fills; a session whose paper side is a sim run matches its replay exactly). 229 Python |
 
 ---
 
@@ -148,7 +149,7 @@
 | Replay throughput (no strategy) | ≥ 5 M events/s single-threaded, Release build |
 | One-day BTCUSDT backtest with a Python strategy on a 1 s timer | < 2 min |
 | Data coverage | ≥ 30 clean recorded days for BTCUSDT and ETHUSDT |
-| Sim-vs-paper parity (V5) | Fill ratio within ±15% relative; 1 s markout mean within 1 tick |
+| Sim-vs-paper parity (V5) | Fill ratio within ±15% relative; 1 s markout mean within the sim's own seed range (at least 1 tick) |
 | Test suite | All green in CI; core line coverage ≥ 80% |
 
 ---
@@ -542,7 +543,7 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 ### Acceptance criteria
 - [x] `run_all.py` uses connector v2; `interactive_test.py` still passes (its fill predictor is updated to account for queue position). (2026-11-14: market, IOC, passive limit and FOK cases pass on the live mirror; the check compares quantity per price level)
 - [x] The same strategy file runs in sim and in paper without modification. (2026-11-14: `research.strategies.passive_quoter:PassiveQuoter` through `research/live/runner.py`; tested against the server and run live on BTC-USDT)
-- [ ] With calibrated presets: fill ratio within ±15% relative, and 1 s markout mean within 1 tick, over ≥ 3 paper sessions.
+- [ ] With calibrated presets: fill ratio within ±15% relative, and 1 s markout mean within the sim's own seed range (at least 1 tick), over ≥ 3 paper sessions.
 - [ ] Tag `v2.0.0-p7`.
 
 ### Note on paper-mode limits
@@ -716,7 +717,7 @@ Tick these off as phases complete.
 
 **Phase 7: Live Parity & Calibration**
 - [x] P7.1 Market-feed endpoint  - [x] P7.2 Connector v2  - [x] P7.3 Live runner  - [x] P7.4 Protocol
-- [ ] P7.5 Parity report  - [ ] P7.6 Calibration  - [ ] P7.7 Testnet (opt)  - [ ] P7.8 Remove v1 connector
+- [x] P7.5 Parity report  - [ ] P7.6 Calibration  - [ ] P7.7 Testnet (opt)  - [ ] P7.8 Remove v1 connector
 
 **Phase 8: Release 2.0**
 - [ ] P8.1 README  - [ ] P8.2 Explanations  - [ ] P8.3 Changelog  - [ ] P8.4 Sample data
