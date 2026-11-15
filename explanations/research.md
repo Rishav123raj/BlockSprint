@@ -84,7 +84,7 @@ The same classes run unchanged in paper mode (`live/runner.py` below).
 | `soak.py` | P7.8: runs the server and bridge for hours, compares the book with Binance's REST book every minute, and checks resyncs, crossed books, memory growth and the 24 h reconnect |
 | `testnet.py` | P7.7: REST and order round trips on the **Spot Testnet** only, the one module allowed to sign requests (enforced in CI) |
 
-`scripts/binance_connector.py` is the deprecated v1 connector (`--v1`), kept until the soak test passes.
+`scripts/binance_connector.py` starts the feed bridge for five symbols; the 1.0 connector it used to hold (`--v1`) was removed in P7.8.
 
 ## `research/calibration/`: calibration (P7.6, [docs/calibration.md](../docs/calibration.md))
 

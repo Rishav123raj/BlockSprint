@@ -644,7 +644,7 @@ void ApiServer::broadcast_trade(const std::string& symbol, const Trade& trade) {
 }
 
 void ApiServer::broadcast_exec_report(const ExecReport& report) {
-    // The mirror's own orders (the v1 connector's levels, the feed's synthetic orders and tape IOCs) are the
+    // The mirror's own orders (the feed's synthetic orders and tape IOCs) are the
     // market, not anyone's executions
     if (report.owner_id == kMarketOwner || report.owner_id == kTapeOwner) {
         return;

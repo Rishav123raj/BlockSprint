@@ -1,7 +1,7 @@
 """Connector v2 (P7.2): Binance's diff-depth and trade streams, kept exact with the normalizer's sync rules,
 sent to the server's /ws/market-feed (P7.1), where the simulator's Synthesizer turns them into the book.
 
-v1 (scripts/binance_connector.py --v1) mirrored each level of the top-10 partial book as one order and
+v1 (the 1.0 connector, removed in P7.8) mirrored each level of the top-10 partial book as one order and
 re-submitted a level on every change, which put it at the back of the queue (D10), and its frames had no
 sequence numbers, so a lost one went unnoticed. v2 streams every update with its IDs:
 

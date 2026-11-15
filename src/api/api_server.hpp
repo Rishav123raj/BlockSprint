@@ -45,8 +45,8 @@ private:
     void on_close(websocketpp::connection_hdl hdl);
     void on_message(websocketpp::connection_hdl hdl, WsServerType::message_ptr msg);
 
-    // Owners reserved for mirrored exchange liquidity (the v1 connector's levels, the market feed's synthetic
-    // orders and tape IOCs); MARKET is accepted only from loopback connections, MARKET_TAPE never
+    // Owners reserved for mirrored exchange liquidity (the market feed's synthetic orders and tape IOCs; MARKET
+    // was also the 1.0 connector's levels); MARKET is accepted only from loopback connections, MARKET_TAPE never
     inline static const std::string kMarketOwner = "MARKET";
     inline static const std::string kTapeOwner = "MARKET_TAPE";
 

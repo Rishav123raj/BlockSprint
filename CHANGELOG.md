@@ -46,7 +46,7 @@ Existing 1.x clients keep working, except for the points below.
 
 #### Connector
 
-- `scripts/binance_connector.py` v1 (top-10 partial book re-submitted as orders, D10) is **deprecated**: `--v1` prints a warning. It is replaced by connector v2, `research/live/feed_bridge.py`, which streams every diff-depth update into `/ws/market-feed`. v1 will be removed once v2 passes the 24-hour soak test (`research/live/soak.py`).
+- `scripts/binance_connector.py` v1 (top-10 partial book re-submitted as orders, D10) is **removed**, with its `--v1` flag (deprecated at `v2.0.0-p7`, removed after the soak test in P7.8). `scripts/binance_connector.py` now runs only connector v2, `research/live/feed_bridge.py`, which streams every diff-depth update into `/ws/market-feed`.
 
 ### Added
 

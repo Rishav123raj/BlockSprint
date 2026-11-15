@@ -1,6 +1,6 @@
 """Soak test for connector v2 (P7.8): run the server and the feed bridge for hours, and check them against Binance.
 
-The v1 connector is removed once v2 passes this. It starts a fresh server and ``research.live.feed_bridge`` for the
+The v1 connector was removed after v2's 26 h run (docs/baseline/soak_2026-11-14.md, P7.8). It starts a fresh server and ``research.live.feed_bridge`` for the
 symbols and, until ``--hours`` have passed:
 
 * every ``--poll-s`` (5 s): both processes are alive, and which symbols are synced (``/api/market-feed``), to time

@@ -91,6 +91,7 @@
 | 2026-11-14 | P8.2 done | `explanations/` covers 2.0: an index (`README.md`) and eight new pages, one per component: `sim_data_files` (.bse, mmap, replayer, L2 book, reconstruction, slices), `sim_synthesizer` (L2 to L3, queue models, impact), `sim_simulator` (event loop, Rng, latency, gateway, observed book, result files), `sim_strategies` (interface, RiskGuard, reference strategies), `sim_run` (config, run_simulation, bs_sim), `sim_live` (LiveFeed), `bindings`, `research` (the toolkit's map). Core pages brought up to Phase 7: `events` (risk_* and gap_halted), `main` (--port, --feed-*), `api_server` (/ws/market-feed, MARKET_TAPE, gap events). Function names checked against the headers; every relative link resolves. 249 Python |
 | 2026-11-15 | P8.3 done | `CHANGELOG.md` (Keep a Changelog): 2.0.0 (unreleased) with breaking changes (the P1 API-compatibility table plus the default 0.10% fees, `MARKET_TAPE`, `/ws/executions` filtering; the C++ API: `MatchingEngine`, fixed point, `IClock`, reports, amend; build: `unit_tests`, submodules, Python 3.13/uv; connector v1 deprecated), additions by phase, D1-D22 fixes, the leaked-key security note, known limitations; and 1.0.0. 249 Python |
 | 2026-11-15 | Soak test accepted | 26 h run from 2026-11-14 05:52 UTC, 1,560 checks (`docs/baseline/soak_2026-11-14.md`, verdict copied as `.json`): processes up, book match median 1.0 (BTCUSDT 0.95), never crossed, memory within limits; resyncs up to 116 s failed the 30 s criterion during a loss of the PC's network 09:59-10:07 IST (8-10 s from reconnect to all synced). `pass: false`, accepted with the outage as an external event (user's decision); Binance's 24 h close not observed and server memory for the live books (2.3 MB/h over 22 h, released on reset) not shown to level off: both in the changelog's known limitations. P7.8 unblocked |
+| 2026-11-15 | P7.8 done | `scripts/binance_connector.py` keeps only v2: the 1.0 per-level mirror (`--v1`, `sync_websocket_deltas`, its order bookkeeping, engine reset and spec registration, which the feed bridge does itself) is removed; the script takes no options, so an old `--v1` command line fails instead of silently running v2. Comments in `api_server.*`, `feed_bridge.py`, `soak.py` and the docs updated; the server still reserves `MARKET` for loopback clients. |
 
 ---
 
@@ -547,7 +548,7 @@ It's split into **P2a (recorder, started immediately after P0)** and **P2b (ever
 | P7.5 | **Parity report:** compare fill ratio, time to fill, markouts, slippage and PnL decomposition (sim vs paper) | `research/analytics/parity.py` | 1.5 |
 | P7.6 | **Calibration:** fit the `ProbPower` exponent *n* and the latency distributions so sim matches paper (grid search on the parity metrics); save calibrated profiles as named presets (`binance_spot_tokyo_vps`, `binance_spot_home_pc`) | `research/calibration/` | 2 |
 | P7.7 | *(Optional)* **Binance Spot Testnet** small-size runs as a second reference. Note that testnet liquidity isn't representative, so use it for latency calibration only. | `research/live/testnet.py` | 1 |
-| P7.8 | Remove the v1 connector path once v2 passes a 24-48 h soak test (`research/live/soak.py`: book against Binance's REST depth every minute, resyncs, the 24 h forced reconnect, memory); replaces the original two-week wait. v1 deprecated at `v2.0.0-p7` | scripts | 0.5 |
+| P7.8 | Remove the v1 connector path once v2 passes a 24-48 h soak test (`research/live/soak.py`: book against Binance's REST depth every minute, resyncs, the 24 h forced reconnect, memory); replaces the original two-week wait. v1 deprecated at `v2.0.0-p7`. **Done 2026-11-15** (soak run accepted) | scripts | 0.5 |
 
 ### Acceptance criteria
 - [x] `run_all.py` uses connector v2; `interactive_test.py` still passes (its fill predictor is updated to account for queue position). (2026-11-14: market, IOC, passive limit and FOK cases pass on the live mirror; the check compares quantity per price level)
@@ -726,7 +727,7 @@ Tick these off as phases complete.
 
 **Phase 7: Live Parity & Calibration**
 - [x] P7.1 Market-feed endpoint  - [x] P7.2 Connector v2  - [x] P7.3 Live runner  - [x] P7.4 Protocol
-- [x] P7.5 Parity report  - [x] P7.6 Calibration  - [x] P7.7 Testnet (opt)  - [ ] P7.8 Remove v1 connector
+- [x] P7.5 Parity report  - [x] P7.6 Calibration  - [x] P7.7 Testnet (opt)  - [x] P7.8 Remove v1 connector
 
 **Phase 8: Release 2.0**
 - [x] P8.1 README  - [x] P8.2 Explanations  - [x] P8.3 Changelog  - [x] P8.4 Sample data
