@@ -92,6 +92,7 @@
 | 2026-11-15 | P8.3 done | `CHANGELOG.md` (Keep a Changelog): 2.0.0 (unreleased) with breaking changes (the P1 API-compatibility table plus the default 0.10% fees, `MARKET_TAPE`, `/ws/executions` filtering; the C++ API: `MatchingEngine`, fixed point, `IClock`, reports, amend; build: `unit_tests`, submodules, Python 3.13/uv; connector v1 deprecated), additions by phase, D1-D22 fixes, the leaked-key security note, known limitations; and 1.0.0. 249 Python |
 | 2026-11-15 | Soak test accepted | 26 h run from 2026-11-14 05:52 UTC, 1,560 checks (`docs/baseline/soak_2026-11-14.md`, verdict copied as `.json`): processes up, book match median 1.0 (BTCUSDT 0.95), never crossed, memory within limits; resyncs up to 116 s failed the 30 s criterion during a loss of the PC's network 09:59-10:07 IST (8-10 s from reconnect to all synced). `pass: false`, accepted with the outage as an external event (user's decision); Binance's 24 h close not observed and server memory for the live books (2.3 MB/h over 22 h, released on reset) not shown to level off: both in the changelog's known limitations. P7.8 unblocked |
 | 2026-11-15 | P7.8 done | `scripts/binance_connector.py` keeps only v2: the 1.0 per-level mirror (`--v1`, `sync_websocket_deltas`, its order bookkeeping, engine reset and spec registration, which the feed bridge does itself) is removed; the script takes no options, so an old `--v1` command line fails instead of silently running v2. Comments in `api_server.*`, `feed_bridge.py`, `soak.py` and the docs updated; the server still reserves `MARKET` for loopback clients. |
+| 2026-11-15 | P8.5 done | `docs/baseline/v2.0.0.md` at `b028c52`, laptop on mains, MSVC Release: `bench_core` best of 3, 2.47-3.09 M ops/s `sim` and 0.98-1.08 M `live` (1.0: 40-58 k and 10-13 k); `perf_test` 5,821 orders/s, p50 17.3 ms (1.0: 1,923, 55.1 ms); `bench_sim` full day 32.7 s, same events and fills as Phase 3; sample quickstart 1.9 s with the README's hash; tests 114 core, 121 sim, 249 Python; the three paper sessions replayed again, outputs and `parity.json` byte-identical. Plan targets tabled (one-day < 30 s and the markout acceptance not met, as recorded before). GCC: `docs/dev_setup.md` now says 13+ like the README (it said 9+); a local GCC build was not made (no make or ninja in MSYS2), CI covers GCC. README engine range updated to these runs and links the baseline |
 
 ---
 
@@ -731,4 +732,4 @@ Tick these off as phases complete.
 
 **Phase 8: Release 2.0**
 - [x] P8.1 README  - [x] P8.2 Explanations  - [x] P8.3 Changelog  - [x] P8.4 Sample data
-- [ ] P8.5 Final numbers  - [ ] P8.6 `v2.0.0` tag
+- [x] P8.5 Final numbers  - [ ] P8.6 `v2.0.0` tag

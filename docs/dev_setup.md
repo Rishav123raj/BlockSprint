@@ -6,7 +6,7 @@
 
 | | Windows | Linux |
 | :--- | :--- | :--- |
-| Compiler | Visual Studio 2022 with "Desktop development with C++" (MSVC). The x64 Native Tools prompt is **not** needed: CMake finds Visual Studio itself | GCC 9+ or Clang 10+ |
+| Compiler | Visual Studio 2022 with "Desktop development with C++" (MSVC). The x64 Native Tools prompt is **not** needed: CMake finds Visual Studio itself | GCC 13+ (CI builds with Ubuntu's GCC; also tested with 15.2). Clang is untested |
 | CMake | 3.15 or later, on `PATH` (if missing or too old, scikit-build-core downloads one) | same |
 | Python | 3.13 (`uv` installs it if needed) | same |
 | uv | 0.8 or later | same |
