@@ -133,6 +133,7 @@ Also fixed in the 1.0 connector: REST snapshots fetched with blocking calls insi
 
 - Paper mode is simulated fills against a mirrored book, not real orders; strategy orders don't change what other participants do.
 - Calibration meets the markout target on 2 of 3 paper sessions; `docs/calibration.md` has the details. The Tokyo VPS latency preset is an estimate.
+- The connector v2 soak test (2026-11-14, 26 h, [docs/baseline/soak_2026-11-14.md](docs/baseline/soak_2026-11-14.md)) was accepted with one criterion failed: resyncs took up to 116 s during a loss of the test PC's network (under 10 s once Binance was reachable). It did not observe Binance's own 24 h connection close (the outage replaced the connection first) and did not show where the server's memory for the live books levels off (about 2.3 MB/h over 22 h, released when the books reset).
 
 ## [1.0.0] - 2026-07-04
 

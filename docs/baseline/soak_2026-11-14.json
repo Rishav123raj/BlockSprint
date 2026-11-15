@@ -1,0 +1,175 @@
+{
+  "hours": 26.002,
+  "checks": 1560,
+  "reconnects": 3,
+  "resyncs": 20,
+  "slowest_resync_s": 115.6,
+  "symbols": {
+    "BNBUSDT": {
+      "checks": 1556,
+      "median_match": 1.0,
+      "min_match": 0.0,
+      "longest_low_run": 2,
+      "crossed": 0
+    },
+    "BTCUSDT": {
+      "checks": 1556,
+      "median_match": 0.95,
+      "min_match": 0.0,
+      "longest_low_run": 3,
+      "crossed": 0
+    },
+    "ETHUSDT": {
+      "checks": 1556,
+      "median_match": 1.0,
+      "min_match": 0.0,
+      "longest_low_run": 3,
+      "crossed": 0
+    },
+    "SOLUSDT": {
+      "checks": 1556,
+      "median_match": 1.0,
+      "min_match": 0.0,
+      "longest_low_run": 1,
+      "crossed": 0
+    },
+    "XRPUSDT": {
+      "checks": 1555,
+      "median_match": 1.0,
+      "min_match": 0.0,
+      "longest_low_run": 1,
+      "crossed": 0
+    }
+  },
+  "server_memory_mb": {
+    "first": 20.71484375,
+    "last": 30.6328125
+  },
+  "bridge_memory_mb": {
+    "first": 41.51171875,
+    "last": 29.0078125
+  },
+  "memory_growth_mb_per_h": {
+    "server": -0.7364586191552746,
+    "bridge": 0.39316904882900244
+  },
+  "covers_24h_reconnect": true,
+  "criteria": {
+    "processes_up": true,
+    "resyncs_fast": false,
+    "book_matches": true,
+    "never_crossed": true,
+    "memory_levels_off": true
+  },
+  "pass": false,
+  "symbols_run": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT"
+  ],
+  "started": "2026-11-14T05:52:05Z",
+  "resync_events": [
+    {
+      "symbol": "BTC-USDT",
+      "lost_at_s": 15091.8,
+      "seconds": 15.1
+    },
+    {
+      "symbol": "BNB-USDT",
+      "lost_at_s": 15091.8,
+      "seconds": 20.1
+    },
+    {
+      "symbol": "ETH-USDT",
+      "lost_at_s": 15091.8,
+      "seconds": 20.1
+    },
+    {
+      "symbol": "SOL-USDT",
+      "lost_at_s": 15091.8,
+      "seconds": 25.1
+    },
+    {
+      "symbol": "XRP-USDT",
+      "lost_at_s": 15091.8,
+      "seconds": 25.1
+    },
+    {
+      "symbol": "BTC-USDT",
+      "lost_at_s": 81453.8,
+      "seconds": 100.5
+    },
+    {
+      "symbol": "BNB-USDT",
+      "lost_at_s": 81453.8,
+      "seconds": 105.5
+    },
+    {
+      "symbol": "ETH-USDT",
+      "lost_at_s": 81453.8,
+      "seconds": 105.5
+    },
+    {
+      "symbol": "XRP-USDT",
+      "lost_at_s": 81453.8,
+      "seconds": 105.5
+    },
+    {
+      "symbol": "SOL-USDT",
+      "lost_at_s": 81453.8,
+      "seconds": 110.5
+    },
+    {
+      "symbol": "BTC-USDT",
+      "lost_at_s": 81751.4,
+      "seconds": 105.5
+    },
+    {
+      "symbol": "BNB-USDT",
+      "lost_at_s": 81751.4,
+      "seconds": 110.5
+    },
+    {
+      "symbol": "ETH-USDT",
+      "lost_at_s": 81751.4,
+      "seconds": 110.5
+    },
+    {
+      "symbol": "SOL-USDT",
+      "lost_at_s": 81751.4,
+      "seconds": 110.5
+    },
+    {
+      "symbol": "XRP-USDT",
+      "lost_at_s": 81751.4,
+      "seconds": 115.6
+    },
+    {
+      "symbol": "BTC-USDT",
+      "lost_at_s": 81892.1,
+      "seconds": 5.0
+    },
+    {
+      "symbol": "BNB-USDT",
+      "lost_at_s": 81892.1,
+      "seconds": 10.1
+    },
+    {
+      "symbol": "ETH-USDT",
+      "lost_at_s": 81892.1,
+      "seconds": 10.1
+    },
+    {
+      "symbol": "SOL-USDT",
+      "lost_at_s": 81892.1,
+      "seconds": 10.1
+    },
+    {
+      "symbol": "XRP-USDT",
+      "lost_at_s": 81892.1,
+      "seconds": 18.3
+    }
+  ]
+}

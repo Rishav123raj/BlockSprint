@@ -186,7 +186,7 @@ uv run python -m research.live.runner --strategy research.strategies.passive_quo
 | **Determinism** | pinned output hashes, identical on MSVC and GCC, for every simulator feature |
 | **Paper vs simulator** | three 15-minute BTCUSDT sessions: fill ratio within 6.1% of paper (target ±15%) |
 | **Calibration** | `prob_power:1.5` at the measured latency, chosen on held-out seeds; the home PC preset's order legs measured from the round trip to Binance |
-| **Live book** | the server's top 10 levels match Binance's REST depth at a median of 100% (soak test, first hour; the 24 h result goes here) |
+| **Live book** | the server's top 10 levels match Binance's REST depth at a median of 100% over a 26 h soak test (95% for BTCUSDT), never crossed; reconnects recovered on their own ([details and limits](docs/baseline/soak_2026-11-14.md)) |
 
 ---
 
