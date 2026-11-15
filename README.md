@@ -25,7 +25,7 @@ Most backtests fill an order as soon as the price touches it. BlockSprint replay
 
 ```powershell
 # 1. Clone and build (asio and websocketpp are submodules)
-git clone --recursive -b v2 git@github.com:Rishav123raj/BlockSprint.git
+git clone --recursive https://github.com/Rishav123raj/BlockSprint.git
 cd BlockSprint
 cmake -B build
 cmake --build build --config Release            # engine, simulator (bs_sim), server, tests

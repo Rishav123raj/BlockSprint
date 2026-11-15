@@ -93,6 +93,7 @@
 | 2026-11-15 | Soak test accepted | 26 h run from 2026-11-14 05:52 UTC, 1,560 checks (`docs/baseline/soak_2026-11-14.md`, verdict copied as `.json`): processes up, book match median 1.0 (BTCUSDT 0.95), never crossed, memory within limits; resyncs up to 116 s failed the 30 s criterion during a loss of the PC's network 09:59-10:07 IST (8-10 s from reconnect to all synced). `pass: false`, accepted with the outage as an external event (user's decision); Binance's 24 h close not observed and server memory for the live books (2.3 MB/h over 22 h, released on reset) not shown to level off: both in the changelog's known limitations. P7.8 unblocked |
 | 2026-11-15 | P7.8 done | `scripts/binance_connector.py` keeps only v2: the 1.0 per-level mirror (`--v1`, `sync_websocket_deltas`, its order bookkeeping, engine reset and spec registration, which the feed bridge does itself) is removed; the script takes no options, so an old `--v1` command line fails instead of silently running v2. Comments in `api_server.*`, `feed_bridge.py`, `soak.py` and the docs updated; the server still reserves `MARKET` for loopback clients. |
 | 2026-11-15 | P8.5 done | `docs/baseline/v2.0.0.md` at `b028c52`, laptop on mains, MSVC Release: `bench_core` best of 3, 2.47-3.09 M ops/s `sim` and 0.98-1.08 M `live` (1.0: 40-58 k and 10-13 k); `perf_test` 5,821 orders/s, p50 17.3 ms (1.0: 1,923, 55.1 ms); `bench_sim` full day 32.7 s, same events and fills as Phase 3; sample quickstart 1.9 s with the README's hash; tests 114 core, 121 sim, 249 Python; the three paper sessions replayed again, outputs and `parity.json` byte-identical. Plan targets tabled (one-day < 30 s and the markout acceptance not met, as recorded before). GCC: `docs/dev_setup.md` now says 13+ like the README (it said 9+); a local GCC build was not made (no make or ninja in MSYS2), CI covers GCC. README engine range updated to these runs and links the baseline |
+| 2026-11-15 | P8.6: release 2.0.0 | `v2` fast-forwarded onto `main` (user's choice over a merge commit), tagged `v2.0.0`, GitHub release with notes. Released with the checklist's open items listed (no nightly fuzz job, the key in the history, two missed metrics, no clean-machine quickstart): user's decision. CHANGELOG dated |
 
 ---
 
@@ -574,10 +575,11 @@ Paper trading against a **mirror** has the same "no impact on others" assumption
 | P8.6 | Merge `v2` → `main`; tag **`v2.0.0`**; GitHub release with notes | 0.2 |
 
 ### Release checklist
-- [ ] All success metrics in §2 met, with evidence linked
-- [ ] CI green on both OSes; nightly fuzz green for 7 consecutive days
-- [ ] No secrets in the tree or history (`gitleaks` scan)
-- [ ] Quickstart verified on a clean machine
+2.0.0 was released on 2026-11-15 with the open items below listed in its release notes (user's decision).
+- [ ] All success metrics in §2 met, with evidence linked. **Open:** evidence in `docs/baseline/v2.0.0.md`; not met: the one-day `PassiveQuoter` run (32.7 s, target 30 s) and the 1 s markout within the seed range in every session (2 of 3)
+- [ ] CI green on both OSes; nightly fuzz green for 7 consecutive days. **Half:** CI green on Windows and Linux; there is no nightly job, the 10⁶-operation fuzz runs on every push
+- [ ] No secrets in the tree or history (`gitleaks` scan). **Open:** none in the tree; the history holds the Binance key committed in 1.0 (`f5d4b49`), not rewritten (user's decision); the scan was not run
+- [ ] Quickstart verified on a clean machine. **Open:** run on the development PC only, including the sample download from the release
 
 ---
 
@@ -732,4 +734,4 @@ Tick these off as phases complete.
 
 **Phase 8: Release 2.0**
 - [x] P8.1 README  - [x] P8.2 Explanations  - [x] P8.3 Changelog  - [x] P8.4 Sample data
-- [x] P8.5 Final numbers  - [ ] P8.6 `v2.0.0` tag
+- [x] P8.5 Final numbers  - [x] P8.6 `v2.0.0` tag

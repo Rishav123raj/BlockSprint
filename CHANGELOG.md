@@ -4,7 +4,7 @@ All notable changes to BlockSprint. The format follows [Keep a Changelog](https:
 
 Defect IDs (D1–D22) refer to the 1.0 review in [backtesting_simulator_integration_guide.md](backtesting_simulator_integration_guide.md). Task IDs (P1.6, …) refer to [blocksprint_2.0_implementation_plan.md](blocksprint_2.0_implementation_plan.md).
 
-## [2.0.0] - Unreleased
+## [2.0.0] - 2026-11-15
 
 2.0 turns BlockSprint from a live matching engine with a Binance mirror into a **market-microstructure-aware backtesting and execution simulator**, with a live paper mode on the same core. The matching engine became a deterministic, integer-priced library; recorded Binance data replays through it with queue and latency models; strategies are written once in C++ or Python and run unchanged in the simulator and in paper mode.
 
@@ -144,5 +144,5 @@ The first release: a live L3 matching engine for crypto spot pairs.
 - A Binance connector mirroring the top 10 levels of the live book as orders.
 - A test harness and a performance script.
 
-[2.0.0]: https://github.com/Rishav123raj/BlockSprint/compare/v1.0.0...v2
+[2.0.0]: https://github.com/Rishav123raj/BlockSprint/compare/v1.0.0...v2.0.0
 [1.0.0]: https://github.com/Rishav123raj/BlockSprint/releases/tag/v1.0.0
