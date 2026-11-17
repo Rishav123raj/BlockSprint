@@ -3,6 +3,9 @@
 # Commit f5d4b49 (1.0) added a .env holding a Binance API key and secret; 18ddebb stopped tracking it. The
 # history was not rewritten (user's decision), and the key was deleted on Binance on 2026-11-17, so the values
 # in that commit are dead. Only that commit is exempt: anything committed since is scanned.
+#
+# Also exempt, as an exact value: the example secret from Binance's API documentation (the SIGNED endpoint
+# example), which tests/python/test_testnet.py uses to check our signing against Binance's documented signature.
 
 title = "BlockSprint"
 
@@ -10,5 +13,6 @@ title = "BlockSprint"
 useDefault = true
 
 [allowlist]
-description = "The 1.0 Binance key in f5d4b49, deleted on Binance on 2026-11-17"
+description = "The 1.0 Binance key in f5d4b49 (deleted on Binance on 2026-11-17); Binance's documented example secret"
 commits = ["f5d4b4908699558f7ade4ca602f5549aaeb9f034"]
+regexes = ['''NhqPtmdSJYdKjVHjA7PZj4Mge3R5YNiP1e3UZjInClVN65XAbvqqM6A7H5fATj0j''']
