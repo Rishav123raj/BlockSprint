@@ -22,7 +22,8 @@ jobs:
   secrets:
     # Release checklist: no secrets in the tree or history. Scans every commit with gitleaks' default rules;
     # .gitleaks.toml exempts only f5d4b49, the 1.0 commit whose Binance key was deleted on Binance. --redact
-    # keeps any finding's value out of the log.
+    # keeps any finding's value out of the log; each finding also becomes an annotation (rule, file, line,
+    # commit), so it shows on the run's summary page.
     name: Secret scan (gitleaks)
     runs-on: ubuntu-latest
     steps:
@@ -31,8 +32,15 @@ jobs:
           fetch-depth: 0  # the whole history
       - name: gitleaks
         run: |
+          set +e
           docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
-            git /repo --config /repo/.gitleaks.toml --redact --verbose
+            git /repo --config /repo/.gitleaks.toml --redact --verbose \
+            --report-format json --report-path /repo/gitleaks.json
+          code=$?
+          if [ -s gitleaks.json ]; then
+            python3 -c 'import json; [print("::error file=%s,line=%s::gitleaks %s in commit %s" % (f["File"], f["StartLine"], f["RuleID"], f["Commit"][:7])) for f in json.load(open("gitleaks.json"))]'
+          fi
+          exit $code
 
   build-test:
     name: ${{ matrix.name }}
