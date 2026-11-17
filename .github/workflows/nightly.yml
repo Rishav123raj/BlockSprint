@@ -1,0 +1,81 @@
+name: Nightly
+
+# Release checklist: nightly fuzz (green for 7 consecutive nights) and the quickstart on a clean machine.
+# GitHub runs scheduled workflows from the default branch (main) only. A push that changes this file runs it
+# too, so a change is tested before it reaches main.
+on:
+  schedule:
+    - cron: "17 21 * * *"  # 02:47 IST
+  workflow_dispatch:
+  push:
+    branches: [main, v2]
+    paths: [".github/workflows/nightly.yml"]
+    tags: ["v*"]
+
+jobs:
+  fuzz:
+    # CI's fuzz job runs the same 20 fixed seeds on every push; this one runs 20 new seeds each night, 50,000
+    # operations each (10^6 in total), derived from the run ID. A failing seed is in the log: replay it with
+    # BLOCKSPRINT_FUZZ_SEED=<seed> BLOCKSPRINT_FUZZ_OPS=50000 unit_tests -ts=fuzz
+    name: Fuzz / new seeds (GCC)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unit tests
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++ -DBLOCKSPRINT_BUILD_SERVER=OFF -DBLOCKSPRINT_BUILD_BENCH=OFF
+          cmake --build build -j 4 --target unit_tests
+      - name: Fuzz
+        env:
+          BLOCKSPRINT_FUZZ_OPS: "50000"
+        run: |
+          base=$(( GITHUB_RUN_ID % 100000000 ))
+          for i in $(seq 1 20); do
+            seed=$(( base * 20 + i ))
+            echo "::group::seed $seed"
+            BLOCKSPRINT_FUZZ_SEED=$seed ./build/unit_tests -ts=fuzz || { echo "::error::fuzz failed with seed $seed"; exit 1; }
+            echo "::endgroup::"
+          done
+
+  quickstart:
+    # The README's quickstart, step by step, on a fresh runner: build, uv sync, download the sample from the
+    # sample-data-v1 release (SHA-256 and manifest checked), the C++ quoter (its output hash must equal the one
+    # recorded in docs/baseline/v2.0.0.md), and the Python experiment with its report
+    name: Quickstart / ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            bs_sim: build/Release/bs_sim.exe
+          - name: Linux
+            os: ubuntu-latest
+            bs_sim: build/bs_sim
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true  # git clone --recursive
+      - uses: astral-sh/setup-uv@v5
+
+      - name: 1. Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release -j 4
+      - name: 2. uv sync
+        run: uv sync
+      - name: 3. Sample dataset
+        run: uv run python -m research.data.sample get
+      - name: 4. C++ strategy on the sample
+        run: |
+          ${{ matrix.bs_sim }} run configs/sim/sample_quoter.json | tee quoter.log
+          grep -q "output_hash b7cb4014a47bbf6bc31cae63ed9b0e4623ce120e33a468ef45667bf7f030372d" quoter.log
+      - name: 5. Python experiment and report
+        run: |
+          uv run python -m research.run research/experiments/configs/sample_mm.yaml
+          test -s results/experiments/sample_mm/report.html

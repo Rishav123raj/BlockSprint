@@ -19,6 +19,21 @@ jobs:
           if [ -n "$hits" ]; then echo "Binance request signing outside research/live/testnet.py:"; echo "$hits"; exit 1; fi
           grep -q '^BASE = "https://testnet.binance.vision"$' research/live/testnet.py
 
+  secrets:
+    # Release checklist: no secrets in the tree or history. Scans every commit with gitleaks' default rules;
+    # .gitleaks.toml exempts only f5d4b49, the 1.0 commit whose Binance key was deleted on Binance. --redact
+    # keeps any finding's value out of the log.
+    name: Secret scan (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the whole history
+      - name: gitleaks
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.21.2 \
+            git /repo --config /repo/.gitleaks.toml --redact --verbose
+
   build-test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
@@ -118,6 +133,3 @@ jobs:
           name: wheel-${{ matrix.name }}
           path: dist/*.whl
           if-no-files-found: error
-
-# A gitleaks secret-scan job is deferred until the decision on purging the old .env commit
-# (commit f5d4b49) from history: a full-history scan would fail on it until then.

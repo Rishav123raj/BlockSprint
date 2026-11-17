@@ -94,6 +94,7 @@
 | 2026-11-15 | P7.8 done | `scripts/binance_connector.py` keeps only v2: the 1.0 per-level mirror (`--v1`, `sync_websocket_deltas`, its order bookkeeping, engine reset and spec registration, which the feed bridge does itself) is removed; the script takes no options, so an old `--v1` command line fails instead of silently running v2. Comments in `api_server.*`, `feed_bridge.py`, `soak.py` and the docs updated; the server still reserves `MARKET` for loopback clients. |
 | 2026-11-15 | P8.5 done | `docs/baseline/v2.0.0.md` at `b028c52`, laptop on mains, MSVC Release: `bench_core` best of 3, 2.47-3.09 M ops/s `sim` and 0.98-1.08 M `live` (1.0: 40-58 k and 10-13 k); `perf_test` 5,821 orders/s, p50 17.3 ms (1.0: 1,923, 55.1 ms); `bench_sim` full day 32.7 s, same events and fills as Phase 3; sample quickstart 1.9 s with the README's hash; tests 114 core, 121 sim, 249 Python; the three paper sessions replayed again, outputs and `parity.json` byte-identical. Plan targets tabled (one-day < 30 s and the markout acceptance not met, as recorded before). GCC: `docs/dev_setup.md` now says 13+ like the README (it said 9+); a local GCC build was not made (no make or ninja in MSYS2), CI covers GCC. README engine range updated to these runs and links the baseline |
 | 2026-11-15 | P8.6: release 2.0.0 | `v2` fast-forwarded onto `main` (user's choice over a merge commit), tagged `v2.0.0`, GitHub release with notes. Released with the checklist's open items listed (no nightly fuzz job, the key in the history, two missed metrics, no clean-machine quickstart): user's decision. CHANGELOG dated |
+| 2026-11-17 | After the release | Release page published (notes: the key deleted on Binance, done by the user in the mobile app; a check from here was inconclusive: Binance's key-only endpoints are retired, and signing is not allowed). CI: `secrets` job (gitleaks v8.21.2 over the whole history, `--redact`, `.gitleaks.toml` exempts only `f5d4b49`); `nightly.yml`: 20 new fuzz seeds a night from the run ID, and the README quickstart on fresh Windows and Linux runners with the sample's output hash checked. Scheduled runs start once the file is on `main` |
 
 ---
 
@@ -577,9 +578,9 @@ Paper trading against a **mirror** has the same "no impact on others" assumption
 ### Release checklist
 2.0.0 was released on 2026-11-15 with the open items below listed in its release notes (user's decision).
 - [ ] All success metrics in §2 met, with evidence linked. **Open:** evidence in `docs/baseline/v2.0.0.md`; not met: the one-day `PassiveQuoter` run (32.7 s, target 30 s) and the 1 s markout within the seed range in every session (2 of 3)
-- [ ] CI green on both OSes; nightly fuzz green for 7 consecutive days. **Half:** CI green on Windows and Linux; there is no nightly job, the 10⁶-operation fuzz runs on every push
-- [ ] No secrets in the tree or history (`gitleaks` scan). **Open:** none in the tree; the history holds the Binance key committed in 1.0 (`f5d4b49`), not rewritten (user's decision); the scan was not run
-- [ ] Quickstart verified on a clean machine. **Open:** run on the development PC only, including the sample download from the release
+- [ ] CI green on both OSes; nightly fuzz green for 7 consecutive days. **Half:** CI green on Windows and Linux; the nightly job (`nightly.yml`, 20 new seeds a night) was added on 2026-11-17, so the 7 nights are still to come
+- [ ] No secrets in the tree or history (`gitleaks` scan). **Open:** none in the tree; the history holds the Binance key committed in 1.0 (`f5d4b49`), not rewritten (user's decision); the key was deleted on Binance on 2026-11-17, and from that day CI scans the whole history with gitleaks on every push, exempting only `f5d4b49`
+- [ ] Quickstart verified on a clean machine. **Open:** run on the development PC only, including the sample download from the release; from 2026-11-17 the nightly workflow runs it on fresh Windows and Linux runners
 
 ---
 
