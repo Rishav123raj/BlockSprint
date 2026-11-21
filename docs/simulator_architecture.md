@@ -615,6 +615,7 @@ One directory per run:
 | `bbo_samples.csv` | true and observed BBO every Δt (configurable) |
 | `positions.csv` | position, cash, fees and mark-to-market PnL every Δt |
 | `run_meta.json` | the fully resolved config, its hash, the dataset manifest hash, the `.bse` SHA-256s, the git SHA, the seed, event counts and wall time |
+| `queue_positions.csv` | optional: each resting strategy order's place in its queue over time (below) |
 | `output_hash` | a canonical hash over all outputs (for V1) |
 
 CSV comes first because it's simple and diffable; Python converts it to Parquet (Phase 4). The record layouts are canonical, so the output hash is stable.
@@ -650,6 +651,23 @@ CSV comes first because it's simple and diffable; Python converts it to Parquet 
 - A field the CSV leaves empty holds 0.
 - Python views these as numpy structured arrays without copying, and `research/sim/results.py` turns them into polars DataFrames equal to the CSVs (`docs/dev_setup.md`).
 - The CSVs and the output hash are unchanged.
+
+**Queue positions (optional, config `output.queue_positions: true`).** `queue_positions.csv` follows every resting strategy order's place in its level's FIFO queue **inside the engine**, so under the run's queue model: one row whenever the quantity ahead of it, its own remaining quantity or the quantity behind it changes.
+
+| Column | Meaning |
+| :--- | :--- |
+| `ts_ns, owner, order_id, side, price` | when, whose, which order, at which level |
+| `ahead_qty` | the quantity in front of the order in the queue: what must trade or cancel before it fills |
+| `leaves_qty` | the order's own remaining quantity |
+| `behind_qty` | the quantity queued after it |
+| `cause` | the event after which it changed: a data batch (`trade`, `depth`, `snapshot`, `gap`) or `order` (a strategy request arrived: the order's own placement, an amend, or another order's) |
+
+- **How:** the simulator calls an observer after each data batch and each request arrival (`Simulator::set_event_observer`). The recorder keeps the strategies' resting orders from the execution reports (in acceptance order, an ordered map), walks each one's level in the engine and writes a row on a change. A new order's first row has cause `order`.
+- **Off by default, and outside the defaults:** a config without the key resolves and hashes as before, so cached runs and pinned hashes stay valid. With it, the file is part of `output_hash`; the other five files are byte-identical either way (tested).
+- **Compared with `research.analytics.queue`:** that measures the queue ahead at entry from the data (the same under every queue model). This is the engine's own queue over time, so it shows how the chosen model drains it.
+- **Tested:** a hand-built stream where every row is known (the cancel comes out from behind under `cancel_from_back` and from ahead under `cancel_from_front`); on the fixture, rows agree with the execution reports (prices, quantities, first row at the acknowledgement) and change on every row.
+- **On real data** (`configs/sim/example_btc.json`, 6 h, the passive quoter): 390,283 rows (27.5 MB), 9.1 s → 10.5 s.
+- In Python: `Results.queue_positions` (numpy, no copy) and `to_polars("queue_positions")`; `None` when not recorded. The experiment store saves it as `queue_positions.parquet`.
 
 ---
 

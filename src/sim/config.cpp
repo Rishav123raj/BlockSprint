@@ -125,7 +125,7 @@ const std::map<std::string, std::set<std::string>>& schema() {
         {"limits", {"orders_per_10s", "orders_per_day", "open_orders", "request_weight_per_min"}},
         {"risk", {"max_position", "max_order_notional", "max_open_orders", "max_drawdown"}},
         {"strategy", {"name", "owner", "params"}},
-        {"output", {"dir", "sample_ms"}},
+        {"output", {"dir", "sample_ms", "queue_positions"}},
     };
     return keys;
 }
@@ -593,6 +593,12 @@ RunConfig resolve_run_config(const json& file, const std::vector<std::string>& o
 
     rc.output_dir = get_string(r, "output.dir");
     rc.sample_ns = static_cast<uint64_t>(std::llround(get_nonneg(r, "output.sample_ms") * 1e6));
+    // Not in the defaults, so a config without it resolves (and hashes) as before
+    if (r["output"].contains("queue_positions")) {
+        const json& q = r["output"]["queue_positions"];
+        if (!q.is_boolean()) bad("output.queue_positions", "expected true or false, got " + q.dump());
+        rc.queue_positions = q.get<bool>();
+    }
 
     rc.resolved = std::move(r);
     return rc;

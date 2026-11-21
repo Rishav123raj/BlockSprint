@@ -80,6 +80,24 @@ def requests(tmp_path_factory):
     return Results.run(cfg, EveryRequest(), "timer_only"), out
 
 
+@pytest.fixture(scope="module")
+def queued(tmp_path_factory):
+    """The quoter with queue positions recorded"""
+    out = tmp_path_factory.mktemp("queued")
+    cfg = quoter_config(out)
+    cfg["output"]["queue_positions"] = True
+    return Results.run(cfg), out
+
+
+@pytest.fixture(scope="module")
+def requests_queued(tmp_path_factory):
+    """Every kind of request (amends that move the price, a replace) with queue positions recorded"""
+    out = tmp_path_factory.mktemp("requests_queued")
+    cfg = {"dataset": str(FIXTURE), "latency_preset": "binance_spot_tokyo_vps", "strategy": {"name": "null"},
+           "output": {"dir": str(out), "queue_positions": True}}
+    return Results.run(cfg, EveryRequest(), "timer_only"), out
+
+
 def test_numpy_tables_are_views_of_the_runs_rows(quoter):
     res, _ = quoter
     assert res.output_hash == QUOTER_HASH  # keeping the rows changes nothing
@@ -131,14 +149,14 @@ def _norm(column, value, fixed_columns):
     return str(value)
 
 
-@pytest.mark.parametrize("which", ["quoter", "requests"])
+@pytest.mark.parametrize("which", ["quoter", "requests", "queued", "requests_queued"])
 def test_polars_frames_equal_the_csvs(which, request):
     from research.sim.results import _FIXED
 
     res, out = request.getfixturevalue(which)
     frames = res.to_polars()
-    assert set(frames) == set(TABLES)
-    for t in TABLES:
+    assert set(frames) == set(res.tables) == set(TABLES) | ({"queue_positions"} if "queued" in which else set())
+    for t in res.tables:
         with open(out / f"{t}.csv", newline="", encoding="utf-8") as f:
             rows = list(csv.reader(f))
         header, rows = rows[0], rows[1:]
@@ -177,3 +195,41 @@ def test_polars_dtypes_and_fixed_modes(quoter):
         res.to_polars(fixed="double")
     with pytest.raises(ValueError, match="unknown table"):
         res.to_polars("trades")
+
+
+def test_queue_positions_are_off_by_default(quoter):
+    res, out = quoter
+    assert res.queue_positions is None and "queue_positions" not in res.tables
+    assert not (out / "queue_positions.csv").exists()
+    with pytest.raises(ValueError, match="output.queue_positions"):
+        res.to_polars("queue_positions")
+
+
+def test_recording_queue_positions_changes_no_other_output(quoter, queued):
+    off, on = quoter[0], queued[0]
+    for t in TABLES:
+        assert on.meta["outputs"][f"{t}.csv"] == off.meta["outputs"][f"{t}.csv"], t
+    assert on.output_hash != QUOTER_HASH  # the hash also covers queue_positions.csv
+    q = on.queue_positions
+    assert len(q) == on.meta["outputs"]["queue_positions.csv"]["rows"] > 0
+    assert not q.flags["OWNDATA"]  # a view, as the other tables
+
+
+def test_queue_positions_agree_with_the_reports(queued, requests_queued):
+    for res, _ in (queued, requests_queued):
+        q = res.to_polars("queue_positions", fixed="int")
+        r = res.to_polars("exec_reports", fixed="int")
+        assert q.height > 0
+        assert q.filter((pl.col("ahead_qty") < 0) | (pl.col("behind_qty") < 0) | (pl.col("leaves_qty") <= 0)).is_empty()
+        for (order_id,), rows in q.group_by("order_id", maintain_order=True):
+            mine = r.filter(pl.col("order_id") == order_id)
+            # placed at a price its reports name (a new order, a replace, or an amend that moved it)
+            assert set(rows["price"].to_list()) <= set(mine.filter(pl.col("type").is_in(["ack", "amended"]))["price"].to_list())
+            assert rows["leaves_qty"].max() <= mine["quantity"].max()
+            first_ack = mine.filter(pl.col("type") == "ack")["exchange_ns"].min()
+            assert rows["ts_ns"].min() >= first_ack and rows["cause"][0] == "order"
+            # a row only when something changed
+            v = rows.select("price", "ahead_qty", "leaves_qty", "behind_qty").rows()
+            assert all(a != b for a, b in zip(v, v[1:]))
+        assert {"trade", "depth"} <= set(q["cause"].to_list()) or res is requests_queued[0]
+

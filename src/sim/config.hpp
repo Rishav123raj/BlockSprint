@@ -61,6 +61,7 @@ struct RunConfig {
     // Outputs
     std::string output_dir;
     uint64_t sample_ns = 0;
+    bool queue_positions = false;  // output.queue_positions: also write queue_positions.csv (off when absent)
 
     SessionConfig session() const;
 };

@@ -11,7 +11,8 @@
 * **Queue ahead at entry** is measured on the data, not inside the simulator: the displayed quantity already
   at the placement's price when it reached the exchange (the book after every data batch up to its arrival;
   blocksprint_sim.data_level_qty). It is the same for every queue model; how fast that quantity drains is
-  what the models differ in. `ahead_ratio` is it in multiples of the placement's own quantity.
+  what the models differ in. `ahead_ratio` is it in multiples of the placement's own quantity. To follow the
+  queue inside the engine over time, under the run's model, record `output.queue_positions` (Results.queue_positions).
 * **ticks_from_best:** 0 joined the best price, > 0 behind it, < 0 improved it (a new level: nothing ahead).
 * **Time in queue:** from arrival to the first fill, or to the end (cancel, replace, the run's end).
 * **Traded at / through the price** while it rested (the data's trades): trades at its price by the other side's

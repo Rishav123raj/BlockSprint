@@ -9,6 +9,7 @@ Defect IDs (D1–D22) refer to the 1.0 review in [backtesting_simulator_integrat
 ### Added
 
 - A nightly workflow (`.github/workflows/nightly.yml`): 20 new fuzz seeds each night (10⁶ operations, each seed logged for replay), and the README's quickstart on fresh Windows and Linux runners, which checks the sample run's output hash.
+- Queue positions (`output.queue_positions: true`, off by default): `queue_positions.csv` and `Results.queue_positions` follow each resting strategy order's place in its queue in the engine (quantity ahead, its own, behind), with the cause of every change. Other outputs and pinned hashes are unchanged.
 - A gitleaks scan of the whole history on every push (`.gitleaks.toml`: the default rules, with only the 1.0 commit f5d4b49 exempt).
 
 ### Security

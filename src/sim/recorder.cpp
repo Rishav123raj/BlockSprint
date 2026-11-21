@@ -65,6 +65,17 @@ const char* request_type_name(Request::Type t) {
     return "unknown";
 }
 
+const char* queue_cause_name(QueueCause c) {
+    switch (c) {
+        case QueueCause::DEPTH: return "depth";
+        case QueueCause::SNAPSHOT: return "snapshot";
+        case QueueCause::TRADE: return "trade";
+        case QueueCause::GAP: return "gap";
+        case QueueCause::ORDER: return "order";
+    }
+    return "unknown";
+}
+
 uint32_t ResultTables::order_index(const std::string& id) {
     const auto [it, added] = order_index_.try_emplace(id, static_cast<uint32_t>(order_ids.size()));
     if (added) {
@@ -80,14 +91,29 @@ std::shared_ptr<ResultTables> ResultRecorder::keep_tables() {
         for (uint32_t s = 0; s < gw.session_count(); ++s) {
             tables_->owners.push_back(gw.owner(s));
         }
+        tables_->queue_recorded = queue_on_;
     }
     return tables_;
 }
 
-ResultRecorder::ResultRecorder(Simulator& sim, const std::string& dir, uint64_t sample_ns)
-    : sim_(sim), dir_(dir), multi_(sim.symbol_count() > 1), last_mark_(sim.symbol_count(), 0) {
+std::vector<ResultRecorder::Output*> ResultRecorder::outputs() {
+    std::vector<Output*> out{&orders_, &reports_, &rejects_, &bbo_, &positions_};
+    if (queue_on_) {
+        out.push_back(&queue_);
+    }
+    return out;
+}
+
+ResultRecorder::ResultRecorder(Simulator& sim, const std::string& dir, uint64_t sample_ns, bool queue_positions)
+    : sim_(sim), dir_(dir), queue_on_(queue_positions), multi_(sim.symbol_count() > 1),
+      last_mark_(sim.symbol_count(), 0) {
     fs::create_directories(dir_);
-    for (Output* o : {&orders_, &reports_, &rejects_, &bbo_, &positions_}) {
+    // Without queue positions, an earlier run's file would sit beside outputs it doesn't belong to
+    if (!queue_on_) {
+        std::error_code ec;
+        fs::remove(fs::path(dir_) / queue_.name, ec);
+    }
+    for (Output* o : outputs()) {
         o->out.open(fs::path(dir_) / o->name, std::ios::binary | std::ios::trunc);
         if (!o->out) {
             throw std::runtime_error("recorder: cannot write " + (fs::path(dir_) / o->name).string());
@@ -102,6 +128,13 @@ ResultRecorder::ResultRecorder(Simulator& sim, const std::string& dir, uint64_t 
                 "book_ask_qty,seen_bid,seen_bid_qty,seen_ask,seen_ask_qty,seen_data_ns\n";
     positions_.out << "ts_ns," << owner << "position,cash,fees,mark,pnl,fills,maker_fills,taker_fills,open_orders,"
                       "base_volume,quote_volume\n";
+    if (queue_on_) {
+        queue_.out << "ts_ns," << owner << "order_id,side,price,ahead_qty,leaves_qty,behind_qty,cause\n";
+        sim_.set_event_observer([this](uint64_t t, const Batch* b) {
+            // BatchKind and QueueCause share their first four codes
+            measure_queues(t, b ? static_cast<QueueCause>(static_cast<uint8_t>(b->kind)) : QueueCause::ORDER);
+        });
+    }
     sim_.gateway().set_listener(this);
     if (sample_ns > 0) {
         sim_.set_sampler(sample_ns, [this](uint64_t t) { sample(t); });
@@ -110,8 +143,83 @@ ResultRecorder::ResultRecorder(Simulator& sim, const std::string& dir, uint64_t 
 
 ResultRecorder::~ResultRecorder() {
     sim_.gateway().set_listener(nullptr);
+    sim_.set_event_observer(nullptr);
     if (!finished_) {
         sim_.set_sampler(0, nullptr);
+    }
+}
+
+void ResultRecorder::track(uint32_t session, const ExecReport& r) {
+    const auto it = resting_by_id_.find(r.order_id);
+    switch (r.type) {
+        case ExecType::ACK:
+            if (it == resting_by_id_.end() && r.order_type != OrderType::MARKET) {
+                const uint64_t key = resting_seq_++;
+                const uint32_t sym = multi_ ? sim_.gateway().symbol_index(r.symbol) : 0;
+                resting_.emplace(key, Resting{session, sym, r.side, r.price, r.order_id});
+                resting_by_id_.emplace(r.order_id, key);
+            }
+            return;
+        case ExecType::AMENDED:
+            if (it != resting_by_id_.end()) {
+                resting_.at(it->second).price = r.price;
+            }
+            return;
+        case ExecType::FILL:
+            if (r.leaves_qty > 0) {
+                return;
+            }
+            break;
+        case ExecType::CANCELLED:
+        case ExecType::REJECTED:
+            break;
+    }
+    if (it != resting_by_id_.end()) {
+        resting_.erase(it->second);
+        resting_by_id_.erase(it);
+    }
+}
+
+void ResultRecorder::measure_queues(uint64_t t, QueueCause cause) {
+    for (auto& [key, o] : resting_) {
+        const PriceLevel* level = sim_.engine().find_level(sim_.header(o.symbol).symbol, o.side, o.price);
+        Quantity ahead = 0, leaves = -1, behind = 0;
+        for (const Order* q = level ? level->head : nullptr; q; q = q->queue_next) {
+            if (leaves >= 0) {
+                behind += q->remaining_quantity;
+            } else if (q->order_id == o.order_id) {
+                leaves = q->remaining_quantity;
+            } else {
+                ahead += q->remaining_quantity;
+            }
+        }
+        if (leaves < 0) {
+            continue;  // not resting (an order that never reached the book); its terminal report removes it
+        }
+        if (o.written && ahead == o.ahead && leaves == o.leaves && behind == o.behind) {
+            continue;
+        }
+        o.written = true;
+        o.ahead = ahead;
+        o.leaves = leaves;
+        o.behind = behind;
+        row(queue_) << t << ',' << sim_.gateway().owner(o.session) << symbol_col(o.symbol) << ',' << o.order_id << ','
+                    << sideToString(o.side) << ',' << px(o.price) << ',' << px(ahead) << ',' << px(leaves) << ','
+                    << px(behind) << ',' << queue_cause_name(cause) << '\n';
+        if (tables_) {
+            QueueRow r{};
+            r.ts_ns = t;
+            r.owner = o.session;
+            r.order = tables_->order_index(o.order_id);
+            r.side = static_cast<uint8_t>(o.side);
+            r.cause = static_cast<uint8_t>(cause);
+            r.symbol = static_cast<uint8_t>(o.symbol);
+            r.price = o.price;
+            r.ahead_qty = ahead;
+            r.leaves_qty = leaves;
+            r.behind_qty = behind;
+            tables_->queue.push_back(r);
+        }
     }
 }
 
@@ -159,6 +267,9 @@ void ResultRecorder::on_request(uint32_t session, const Request& r, uint64_t arr
 }
 
 void ResultRecorder::on_report(uint32_t session, const ExecReport& r, uint64_t deliver_at) {
+    if (queue_on_) {
+        track(session, r);
+    }
     const uint32_t sym = multi_ ? sim_.gateway().symbol_index(r.symbol) : 0;
     auto& o = row(reports_);
     o << r.timestamp << ',' << deliver_at << ',' << sim_.gateway().owner(session) << symbol_col(sym) << ',' << r.seq
@@ -339,10 +450,11 @@ json ResultRecorder::finish(const json& meta) {
     finished_ = true;
     write_positions(sim_.now());
     sim_.gateway().set_listener(nullptr);
+    sim_.set_event_observer(nullptr);
 
     json outputs = json::object();
     Sha256 all;
-    for (Output* o : {&orders_, &reports_, &rejects_, &bbo_, &positions_}) {
+    for (Output* o : this->outputs()) {
         o->out.close();
         if (!o->out) {
             throw std::runtime_error(std::string("recorder: writing ") + o->name + " failed");

@@ -7,6 +7,7 @@
         request_rejects.parquet
         bbo_samples.parquet
         positions.parquet
+        queue_positions.parquet  only for a run with output.queue_positions
 
 run_id is the SHA-256 (first 16 hex digits) of the run's identity:
   - the resolved run config without output.dir and without the dataset path (the data is identified by
@@ -37,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 import blocksprint_sim as bs
-from research.sim.results import TABLES, Results
+from research.sim.results import OPTIONAL_TABLES, TABLES, Results
 
 IDENTITY_FORMAT = "bs.run_identity/1"
 ROOT = Path(__file__).resolve().parents[2]
@@ -122,16 +123,21 @@ class StoredRun:
     def output_hash(self) -> str:
         return self.meta["output_hash"]
 
+    @property
+    def tables(self) -> tuple[str, ...]:
+        """The tables this run has: the five, and the optional ones it recorded."""
+        return TABLES + tuple(t for t in OPTIONAL_TABLES if (self.path / f"{t}.parquet").is_file())
+
     def frame(self, table: str):
         """One output table as a polars DataFrame."""
         import polars as pl
 
-        if table not in TABLES:
-            raise ValueError(f"unknown table {table!r}: one of {', '.join(TABLES)}")
+        if table not in self.tables:
+            raise ValueError(f"unknown table {table!r}: one of {', '.join(self.tables)}")
         return pl.read_parquet(self.path / f"{table}.parquet")
 
     def frames(self) -> dict[str, Any]:
-        return {t: self.frame(t) for t in TABLES}
+        return {t: self.frame(t) for t in self.tables}
 
 
 class Store:

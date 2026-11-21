@@ -16,7 +16,7 @@ RunOutcome run_simulation(const RunConfig& rc, nlohmann::json extra, Strategy* s
     }
     Simulator sim(rc.bse_paths(), rc.sim);
     const uint32_t s = sim.add_strategy(*strategy, rc.session());
-    ResultRecorder recorder(sim, rc.output_dir, rc.sample_ns);
+    ResultRecorder recorder(sim, rc.output_dir, rc.sample_ns, rc.queue_positions);
     std::shared_ptr<ResultTables> tables = keep_tables ? recorder.keep_tables() : nullptr;
 
     const auto t0 = std::chrono::steady_clock::now();

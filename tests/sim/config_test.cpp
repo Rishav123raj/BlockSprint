@@ -214,6 +214,20 @@ TEST_CASE("queue models: a name, or an object with model and n") {
     CHECK(contains(error_of(cfg), "queue_model"));
 }
 
+TEST_CASE("queue positions: off and absent from the resolved config unless set; a boolean") {
+    Dataset d;
+    json cfg = minimal(d);
+    const RunConfig plain = resolve_run_config(cfg);
+    CHECK_FALSE(plain.queue_positions);
+    CHECK_FALSE(plain.resolved["output"].contains("queue_positions"));  // so earlier runs keep their config hash
+    cfg["output"] = {{"queue_positions", true}};
+    const RunConfig on = resolve_run_config(cfg);
+    CHECK(on.queue_positions);
+    CHECK(on.resolved["output"]["queue_positions"] == true);
+    CHECK(on.resolved["output"]["dir"] == plain.resolved["output"]["dir"]);  // merged into the defaults
+    CHECK(contains(error_of(cfg, {"output.queue_positions=\"yes\""}), "output.queue_positions"));
+}
+
 TEST_CASE("datasets: a .bse file directly; a symbol is needed when the manifest has several") {
     Dataset d;
     json cfg = minimal(d);

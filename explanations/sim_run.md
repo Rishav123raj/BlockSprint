@@ -31,7 +31,7 @@ built-in defaults  <  latency preset ("latency_preset")  <  config file  <  --se
 | `risk` | The strategy's `RiskGuard` limits, off at 0 ([sim_strategies.md](sim_strategies.md)) |
 | `gap_policy` | `halt` (default), `flatten` or `continue` |
 | `strategy` | `name` (from the registry; `null` for a Python strategy), `owner` (default `S1`), `params` |
-| `output` | `dir`, `sample_ms` (BBO and position sample interval) |
+| `output` | `dir`, `sample_ms` (BBO and position sample interval), `queue_positions` (optional, default off: also write `queue_positions.csv`, each resting strategy order's queue ahead and behind over time; [simulator_architecture.md §12](../docs/simulator_architecture.md#12-outputs)) |
 
 `resolve_run_config(json, overrides)` (or `load_run_config(path, overrides)`) returns a `RunConfig`: the resolved JSON plus the parsed pieces the simulator needs (`SimulatorOptions`, the session's latency models, fees, limits, risk and gap policy, the data files). `latency_preset_names()` lists the presets. Calibrated profiles (`configs/sim/calibrated/*.json`) are ordinary config files to layer in ([docs/calibration.md](../docs/calibration.md)).
 

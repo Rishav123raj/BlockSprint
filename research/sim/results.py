@@ -16,6 +16,11 @@ empty holds 0 there; the rules are in src/sim/recorder.hpp.
 order, with the CSV's strings for enums, owners and order IDs, nulls where the CSV is empty, `*_ns` times as
 UTC datetimes and fixed-point values as exact Decimal(38, 8) (or floats / raw integers on request).
 
+`queue_positions` is optional (config `output.queue_positions: true`): each resting strategy order's place in
+its level's queue in the engine, a row whenever the quantity ahead of it, its own or behind it changes, with the
+cause (a data batch's kind, or `order`: a strategy request arrived). Without it, `queue_positions` is None and
+`to_polars()` leaves it out.
+
 A multi-symbol run (P6.7) has a `symbol` column after `owner` in every table, and `meta["symbols"]`.
 `for_symbol(name)` narrows it to one symbol: the tables' rows of that symbol and its sections of the metadata,
 in the shape of a one-symbol run, which is what the analytics take.
@@ -32,6 +37,7 @@ import numpy as np
 import blocksprint_sim as bs
 
 TABLES = ("orders", "exec_reports", "request_rejects", "bbo_samples", "positions")
+OPTIONAL_TABLES = ("queue_positions",)  # present only when the run recorded them
 NO_OWNER = 0xFFFFFFFF  # bbo_samples of a run without strategies
 
 Fixed = Literal["decimal", "float", "int"]
@@ -44,6 +50,7 @@ _FIXED = {
     "bbo_samples": tuple(f"{src}_{side}{qty}" for src in ("data", "book", "seen") for side in ("bid", "ask")
                          for qty in ("", "_qty")),
     "positions": ("position", "cash", "fees", "mark", "pnl", "base_volume", "quote_volume"),
+    "queue_positions": ("price", "ahead_qty", "leaves_qty", "behind_qty"),
 }
 
 # CSV column order (src/sim/recorder.cpp)
@@ -59,6 +66,8 @@ _COLUMNS = {
                     "seen_data_ns"),
     "positions": ("ts_ns", "owner", "position", "cash", "fees", "mark", "pnl", "fills", "maker_fills", "taker_fills",
                   "open_orders", "base_volume", "quote_volume"),
+    "queue_positions": ("ts_ns", "owner", "order_id", "side", "price", "ahead_qty", "leaves_qty", "behind_qty",
+                        "cause"),
 }
 
 
@@ -75,6 +84,7 @@ class Results:
         self.request_rejects: np.ndarray = tables["request_rejects"]
         self.bbo_samples: np.ndarray = tables["bbo_samples"]
         self.positions: np.ndarray = tables["positions"]
+        self.queue_positions: np.ndarray | None = tables.get("queue_positions")
         self.codes: dict[str, list[str]] = bs.result_codes()
         # The run's symbols, the primary first
         if "symbols" in meta:
@@ -110,7 +120,7 @@ class Results:
             session.update(mine)
         meta["narrowed_from"] = self.symbols
         tables: dict[str, Any] = {"owners": self.owners, "order_ids": self.order_ids}
-        for t in TABLES:
+        for t in self.tables:
             a = getattr(self, t)
             tables[t] = a[a["symbol"] == i]
         keep = self.request_rejects["symbol"] == i
@@ -141,22 +151,28 @@ class Results:
     def output_hash(self) -> str:
         return self.meta["output_hash"]
 
+    @property
+    def tables(self) -> tuple[str, ...]:
+        """The tables this run has: the five, and the optional ones it recorded."""
+        return TABLES + tuple(t for t in OPTIONAL_TABLES if getattr(self, t) is not None)
+
     def __repr__(self) -> str:
-        counts = ", ".join(f"{t} {len(getattr(self, t))}" for t in TABLES)
+        counts = ", ".join(f"{t} {len(getattr(self, t))}" for t in self.tables)
         return f"Results({counts}; output_hash {self.output_hash[:12]})"
 
     def to_polars(self, table: str | None = None, *, fixed: Fixed = "decimal"):
-        """The CSV tables as polars DataFrames: a dict of all five, or the one named.
+        """The CSV tables as polars DataFrames: a dict of the run's tables (`tables`), or the one named.
 
         fixed: "decimal" (exact Decimal(38, 8), the default), "float" (Float64, for plotting) or "int" (the raw
         Int64 in 1e-8 units)."""
         if fixed not in ("decimal", "float", "int"):
             raise ValueError(f"fixed must be 'decimal', 'float' or 'int', not {fixed!r}")
         if table is not None:
-            if table not in TABLES:
-                raise ValueError(f"unknown table {table!r}: one of {', '.join(TABLES)}")
+            if table not in self.tables:
+                hint = " (set output.queue_positions: true to record it)" if table in OPTIONAL_TABLES else ""
+                raise ValueError(f"unknown table {table!r}: one of {', '.join(self.tables)}{hint}")
             return self._frame(table, fixed)
-        return {t: self._frame(t, fixed) for t in TABLES}
+        return {t: self._frame(t, fixed) for t in self.tables}
 
     # ---- conversion ----
 
@@ -179,7 +195,7 @@ class Results:
                 cols[name] = _strings(name, a["order"], self.order_ids, None)
             elif name == "text":
                 cols[name] = pl.Series(name, self.reject_texts, dtype=pl.String)
-            elif name in ("request", "side", "order_type", "stp", "type", "reason", "liquidity"):
+            elif name in ("request", "side", "order_type", "stp", "type", "reason", "liquidity", "cause"):
                 key = "reject_request" if table == "request_rejects" and name == "request" else name
                 cols[name] = _strings(name, a[name], self.codes[key], mask)
             elif name.endswith("_ns"):

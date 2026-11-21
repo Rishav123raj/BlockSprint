@@ -221,6 +221,77 @@ TEST_CASE("run_inputs: the resolved config and its hash, the data file and the m
     CHECK(in["data"]["manifest_sha256"] == Sha256::of_file((dir.path / "manifest.json").string()));
 }
 
+// A bid of 0.002 joins 0.005 at 100.00, then: 0.002 joins behind it (10), a sell trade of 0.003 (20), depth
+// confirming that trade (25, no change), a cancel of 0.001 (30), a sell trade of 0.003 (40) that reaches it
+void queue_stream(const TempFile& f) {
+    Stream s;
+    s.snapshot(0, {{BID, 10000, 5}, {ASK, 10010, 2}});
+    s.depth(10, {{BID, 10000, 7}});
+    s.trade(20, 1, 10000, 3);
+    s.depth(25, {{BID, 10000, 4}});
+    s.depth(30, {{BID, 10000, 3}});
+    s.trade(40, 1, 10000, 3);
+    s.write(f);
+}
+
+std::vector<std::string> queue_rows(const std::string& model, json* meta_out = nullptr, bool on = true,
+                                    const TempPath* keep = nullptr) {
+    TempFile f;
+    queue_stream(f);
+    TempPath out("");
+    const TempPath& dir = keep ? *keep : out;
+    SimulatorOptions opt;
+    opt.queue_model = model;
+    Simulator sim(f.str(), opt);
+    Script s;
+    auto sent = std::make_shared<bool>(false);
+    s.book = [sent](Script&, Context& ctx, const ObservedBook& b) {
+        if (!*sent && b.valid()) {
+            ctx.send(Side::BUY, OrderType::LIMIT, b.best_bid()->price, 2 * kLot);
+            *sent = true;
+        }
+    };
+    sim.add_strategy(s, session("S1", 1));
+    ResultRecorder rec(sim, dir.str(), 0, on);
+    sim.run();
+    const json meta = rec.finish();
+    if (meta_out) *meta_out = meta;
+    return on ? lines_of(dir.path / "queue_positions.csv") : std::vector<std::string>{};
+}
+
+TEST_CASE("queue positions: a row whenever the queue ahead, the order or the queue behind changes") {
+    // cancel_from_back: the cancel at 30 comes out of the queue behind the order
+    const auto back = queue_rows("cancel_from_back");
+    REQUIRE(back.size() == 6);
+    CHECK(back[0] == "ts_ns,owner,order_id,side,price,ahead_qty,leaves_qty,behind_qty,cause");
+    CHECK(back[1] == "2000000,S1,S1-1,buy,100.0,0.005,0.002,0.0,order");   // arrives behind 0.005
+    CHECK(back[2] == "10000000,S1,S1-1,buy,100.0,0.005,0.002,0.002,depth");  // 0.002 joins behind
+    CHECK(back[3] == "20000000,S1,S1-1,buy,100.0,0.002,0.002,0.002,trade");  // the trade takes 0.003 ahead
+    // 25: the depth that confirms the trade changes nothing, so no row
+    CHECK(back[4] == "30000000,S1,S1-1,buy,100.0,0.002,0.002,0.001,depth");  // the cancel comes from behind
+    // 40: 0.002 ahead, then 0.001 of the order; the real trade's last 0.001 also leaves the synthetic queue
+    CHECK(back[5] == "40000000,S1,S1-1,buy,100.0,0.0,0.001,0.0,trade");
+
+    // cancel_from_front: the same cancel comes out of the queue ahead, so the order moves up
+    const auto front = queue_rows("cancel_from_front");
+    REQUIRE(front.size() >= 5);
+    CHECK(front[4] == "30000000,S1,S1-1,buy,100.0,0.001,0.002,0.002,depth");
+}
+
+TEST_CASE("queue positions: off by default, and recording them changes no other output") {
+    json off, on;
+    TempPath a(""), b("");
+    queue_rows("cancel_from_back", &off, false, &a);
+    queue_rows("cancel_from_back", &on, true, &b);
+    CHECK_FALSE(fs::exists(a.path / "queue_positions.csv"));
+    CHECK_FALSE(off["outputs"].contains("queue_positions.csv"));
+    CHECK(on["outputs"]["queue_positions.csv"]["rows"] == 5);
+    for (const char* name : {"orders.csv", "exec_reports.csv", "request_rejects.csv", "bbo_samples.csv", "positions.csv"}) {
+        CHECK(on["outputs"][name] == off["outputs"][name]);
+    }
+    CHECK(on["output_hash"] != off["output_hash"]);  // the hash covers the extra file
+}
+
 TEST_CASE("no sampling when the interval is 0; finish only once") {
     TempFile f;
     Stream data;

@@ -78,6 +78,11 @@ public:
     // samples (P3.13). The engine's clock reads t during the call.
     void set_sampler(uint64_t every_ns, std::function<void(uint64_t t)> fn);
 
+    // Calls fn after each window event that can change the engine's book: a data batch (after the synthesizer
+    // applied it; batch is set) and a strategy request's arrival (batch is null). E.g. for queue positions.
+    using EventObserver = std::function<void(uint64_t t, const Batch* batch)>;
+    void set_event_observer(EventObserver fn) { observer_ = std::move(fn); }
+
     // Runs the whole window; once per Simulator
     void run();
 
@@ -119,6 +124,7 @@ private:
     uint64_t sample_every_ = 0;
     uint64_t next_sample_ = 0;
     std::function<void(uint64_t)> sampler_;
+    EventObserver observer_;
 
     bool ran_ = false;
     SimStats stats_;

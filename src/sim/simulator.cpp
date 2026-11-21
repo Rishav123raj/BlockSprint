@@ -165,7 +165,11 @@ void Simulator::run() {
         clock_->set(e.time);
         ++stats_.events[static_cast<size_t>(e.cls)];
         if (e.cls != EventClass::MARKET_DATA) {
+            const bool arrival = e.cls == EventClass::ORDER_ARRIVE;
             gateway_->dispatch(e);
+            if (arrival && observer_) {
+                observer_(e.time, nullptr);
+            }
             continue;
         }
         data_time = e.time;
@@ -174,6 +178,9 @@ void Simulator::run() {
         f.synth->apply(batch);
         batch.shift = f.synth->shift();  // the strategies see the market as it now stands at the exchange
         gateway_->publish(batch);
+        if (observer_) {
+            observer_(e.time, &batch);
+        }
         ++stats_.data_batches;
         read(batch.symbol);
         if (f.have) {

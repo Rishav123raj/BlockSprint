@@ -199,6 +199,9 @@ py::dict tables_dict(const std::shared_ptr<ResultTables>& t) {
     d["reject_texts"] = t->reject_texts;
     d["bbo_samples"] = view(t, t->bbo);
     d["positions"] = view(t, t->positions);
+    if (t->queue_recorded) {
+        d["queue_positions"] = view(t, t->queue);
+    }
     return d;
 }
 
@@ -233,6 +236,9 @@ py::dict result_codes() {
         v.push_back(request_name(RequestReject::Request(c)));
     }
     d["reject_request"] = v;
+    v.clear();
+    for (int c = 0; c <= static_cast<int>(QueueCause::ORDER); ++c) v.push_back(queue_cause_name(QueueCause(c)));
+    d["cause"] = v;
     return d;
 }
 
@@ -298,6 +304,7 @@ PYBIND11_MODULE(blocksprint_sim, m) {
                              seen_data_ns);
     PYBIND11_NUMPY_DTYPE(PositionRow, ts_ns, owner, symbol, position, cash, fees, mark, pnl, fills, maker_fills,
                              taker_fills, open_orders, base_volume, quote_volume);
+    PYBIND11_NUMPY_DTYPE(QueueRow, ts_ns, owner, order, side, cause, symbol, price, ahead_qty, leaves_qty, behind_qty);
     PYBIND11_NUMPY_DTYPE(BboPoint, ts_ns, bid, bid_qty, ask, ask_qty);
     PYBIND11_NUMPY_DTYPE(TradePoint, ts_ns, px, qty, side);
 
@@ -560,7 +567,8 @@ PYBIND11_MODULE(blocksprint_sim, m) {
         .def_readonly("meta", &PySimulator::meta, "run()'s result (None before the run)")
         .def("tables", &PySimulator::get_tables,
              "After run(): the outputs as numpy structured arrays without a copy (orders, exec_reports, "
-             "request_rejects, bbo_samples, positions), plus owners, order_ids and reject_texts, which the "
+             "request_rejects, bbo_samples, positions; queue_positions when output.queue_positions is on), "
+             "plus owners, order_ids and reject_texts, which the "
              "integer owner / order / row columns index. Raw units: ns, 1e-8 fixed, enum codes (result_codes()). "
              "research.sim.results.Results wraps this.");
 
