@@ -15,7 +15,9 @@ Most backtests fill an order as soon as the price touches it. BlockSprint replay
 - **Latency-aware.** Feed, order entry and ack delays come from seeded distributions. Presets are measured, and can vary with market activity.
 - **Checked against reality.** Paper sessions and their simulator replays are compared on fill ratio, time to fill, markouts and PnL split; calibration fits the simulator to them.
 
-> **Branch note:** `v2` is the 2.0 development branch. It merges into `main` as `v2.0.0` at the end of Phase 8 ([plan](blocksprint_2.0_implementation_plan.md)). 1.0 lives at tag `v1.0.0`.
+> **New to markets, trading or the code?** [docs/blocksprint_complete_guide.md](docs/blocksprint_complete_guide.md) explains BlockSprint from zero: what an order book is, why naive backtests mislead, and how every part of the system works.
+>
+> **Versions:** 2.0.0 was released on 2026-11-15 from `main` ([changelog](CHANGELOG.md)); 1.0 lives at tag `v1.0.0`.
 
 ---
 
